@@ -175,3 +175,20 @@ python src/stages/stage4_mapping.py --sample M2_st_missing_Tcell --backends cyto
 - Rscript 找不到：确认 `--r-cmd` 指向有效 Rscript（建议 conda run）。
 - DLL 相关报错（Windows）：使用默认 `--r-cmd "conda run -n cytospace_v1.1.0_py310 Rscript"`，或手动设置 `CONDA_DLL_SEARCH_MODIFICATION_ENABLE=1`。
 - 输入文件名不匹配：在 `configs/datasets/<sample>.yaml` 显式配置 `paths`。
+## S0/M1 当前固定配置（主线封板）
+- S0（`configs/datasets/S0_matched_dataset.yaml`）：Part2 + Part3 v1+quota 固定开启
+  - `svg_post_enabled: true`
+  - `type_posterior_enabled: true`
+  - `type_post_mode: local_marker_swap`
+  - `type_post_max_changed_cells: 12`
+  - `type_post_high_hurt_threshold: 0.1`
+  - `type_post_max_high_hurt_actions: 2`
+- M1（`configs/datasets/M1_sc_missing_Bcell.yaml`）：baseline-compatible 安全档
+  - `strict_config: true`
+  - `svg_post_enabled: false`
+  - `type_posterior_enabled: false`
+  - `spot_weight_mode: none`
+- 推荐复现实验（可选 `config_id`）
+  - S0：`--config_id S0_freeze_best`
+  - M1：`--config_id M1_freeze_safe`
+

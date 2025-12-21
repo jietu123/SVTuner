@@ -170,6 +170,28 @@ main.py  （总指挥：通过 --samples / --stages / --backends 控制整条流
 
 ```
 
+## 封板配置（S0/M1）
+
+### S0（Plus best：Part2 + Part3 v1+quota）
+- 配置文件：`configs/datasets/S0_matched_dataset.yaml`
+- 关键开关：
+  - `svg_post_enabled: true`
+  - `type_posterior_enabled: true`
+  - `type_post_mode: local_marker_swap`
+  - `type_post_max_changed_cells: 12`
+  - `type_post_high_hurt_threshold: 0.1`
+  - `type_post_max_high_hurt_actions: 2`
+- 复现建议：`--config_id S0_freeze_best`
+
+### M1（Safe：baseline-compatible）
+- 配置文件：`configs/datasets/M1_sc_missing_Bcell.yaml`
+- 关键开关：
+  - `strict_config: true`
+  - `svg_post_enabled: false`
+  - `type_posterior_enabled: false`
+  - `spot_weight_mode: none`
+- 复现建议：`--config_id M1_freeze_safe`
+
 ------
 
 

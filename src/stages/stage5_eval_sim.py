@@ -42,6 +42,7 @@ import numpy as np
 import pandas as pd
 import scipy
 from scipy import sparse
+from scipy.spatial import cKDTree
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 SRC_ROOT = PROJECT_ROOT / "src"
@@ -251,7 +252,7 @@ def _run_uid(run: Stage4RunRef) -> str:
     ]
     base = "__".join(_sanitize_token(t) for t in tokens)
     uid = f"{base}__{h}"
-    max_len = 180
+    max_len = 140
     if len(uid) > max_len:
         keep = max(8, max_len - (len(h) + 2))
         uid = f"{base[:keep]}__{h}"
@@ -975,6 +976,378 @@ def _spatial_entropy(
     return float(h / h_max) if h_max > 0 else 0.0
 
 
+def _build_spot_neighbors(st_coords: pd.DataFrame, k: int) -> Dict[str, List[str]]:
+    spots = [str(s) for s in st_coords.index.astype(str).tolist()]
+    n = len(spots)
+    if n == 0:
+        return {}
+    k_eff = min(int(k), max(n - 1, 0))
+    if k_eff <= 0:
+        return {s: [] for s in spots}
+    xy = st_coords[["row", "col"]].to_numpy(dtype=float)
+    tree = cKDTree(xy)
+    _, idx = tree.query(xy, k=k_eff + 1)
+    if idx.ndim == 1:
+        idx = idx.reshape(-1, 1)
+    out: Dict[str, List[str]] = {}
+    for i, row in enumerate(idx):
+        nbrs = [spots[j] for j in row[1:] if j != i]
+        out[spots[i]] = nbrs
+    return out
+
+
+def _expand_spot_set(spots: Sequence[str], neighbors: Dict[str, List[str]]) -> List[str]:
+    out: set[str] = set()
+    for s in spots:
+        s = str(s)
+        out.add(s)
+        out.update([str(x) for x in neighbors.get(s, [])])
+    return sorted(out)
+
+
+def _eval_local_spot_metrics(
+    *,
+    pred_spot_type: pd.DataFrame,
+    truth_spot_type: pd.DataFrame,
+    st_coords: pd.DataFrame,
+    spot_ids: Sequence[str],
+    missing_spot_policy: str,
+    renorm_policy: str,
+    type_union_policy: str,
+    epsilon: float,
+    spot_subset_policy: str,
+) -> Tuple[Optional[Dict[str, Any]], Dict[str, Any]]:
+    spots = [str(s) for s in spot_ids if str(s) in set(st_coords.index.astype(str))]
+    if not spots:
+        return None, {"skip_reason": "no_local_spots"}
+    pred_local = pred_spot_type.loc[pred_spot_type.index.intersection(spots)]
+    truth_local = truth_spot_type.loc[truth_spot_type.index.intersection(spots)]
+    coords_local = st_coords.loc[st_coords.index.intersection(spots)]
+    metrics, audit = evaluate_spot_type_metrics(
+        pred_spot_type=pred_local,
+        truth_spot_type=truth_local,
+        st_coords=coords_local,
+        missing_spot_policy=missing_spot_policy,
+        renorm_policy=renorm_policy,
+        type_union_policy=type_union_policy,
+        epsilon=epsilon,
+        spot_subset_policy=spot_subset_policy,
+    )
+    return metrics, audit
+
+
+def _metric_delta(a: Optional[Dict[str, Any]], b: Optional[Dict[str, Any]], keys: Sequence[str]) -> Optional[Dict[str, Any]]:
+    if not a or not b:
+        return None
+    out: Dict[str, Any] = {}
+    for k in keys:
+        va = a.get(k)
+        vb = b.get(k)
+        if va is None or vb is None:
+            out[k] = None
+        else:
+            out[k] = float(va) - float(vb)
+    return out
+
+
+def _read_selected_actions(stage4_meta: Dict[str, Any], run_dir: Path) -> Tuple[Optional[pd.DataFrame], Optional[Path]]:
+    path_raw = stage4_meta.get("selected_actions_path")
+    path = None
+    if path_raw:
+        p = Path(str(path_raw))
+        path = p if p.is_absolute() else (run_dir / p)
+    else:
+        path = run_dir / "selected_actions.csv"
+    if path and path.exists():
+        return pd.read_csv(path), path
+    return None, path
+
+
+def _read_selected_type_actions(stage4_meta: Dict[str, Any], run_dir: Path) -> Tuple[Optional[pd.DataFrame], Optional[Path]]:
+    path_raw = stage4_meta.get("selected_type_actions_path")
+    path = None
+    if path_raw:
+        p = Path(str(path_raw))
+        path = p if p.is_absolute() else (run_dir / p)
+    else:
+        path = run_dir / "selected_type_actions.csv"
+    if path and path.exists():
+        return pd.read_csv(path), path
+    return None, path
+
+
+def _build_incremental_report(
+    *,
+    run: Stage4RunRef,
+    stage4_meta: Dict[str, Any],
+    selected_actions: Optional[pd.DataFrame],
+    pred_spot_type: pd.DataFrame,
+    truth_spot_type: pd.DataFrame,
+    st_coords: pd.DataFrame,
+    baseline_run: Optional[Stage4RunRef],
+    missing_spot_policy: str,
+    renorm_policy: str,
+    type_union_policy: str,
+    epsilon: float,
+    spot_subset_policy: str,
+) -> Dict[str, Any]:
+    if run.mode != "plus":
+        return {"skip_reason": "mode_not_plus"}
+    if selected_actions is None or selected_actions.empty:
+        return {"skip_reason": "no_selected_actions"}
+
+    df = selected_actions.copy()
+    for col in ["cell_id", "partner_cell_id", "from_spot", "to_spot", "action_type"]:
+        if col in df.columns:
+            df[col] = df[col].astype(str)
+
+    cell_ids = set(df["cell_id"].dropna().astype(str).tolist()) if "cell_id" in df.columns else set()
+    partner_ids = set(df["partner_cell_id"].dropna().astype(str).tolist()) if "partner_cell_id" in df.columns else set()
+    changed_cells = cell_ids | partner_ids
+    spots_from = set(df["from_spot"].dropna().astype(str).tolist()) if "from_spot" in df.columns else set()
+    spots_to = set(df["to_spot"].dropna().astype(str).tolist()) if "to_spot" in df.columns else set()
+    changed_spots = spots_from | spots_to
+
+    gainA = pd.to_numeric(df.get("gainA"), errors="coerce") if "gainA" in df.columns else pd.Series([], dtype=float)
+    gainA = gainA.dropna()
+    gainB = pd.to_numeric(df.get("gainB"), errors="coerce") if "gainB" in df.columns else pd.Series([], dtype=float)
+    gainB = gainB.dropna()
+    gainSum = pd.to_numeric(df.get("gainSum"), errors="coerce") if "gainSum" in df.columns else pd.Series([], dtype=float)
+    gainSum = gainSum.dropna()
+    partner_hurt = gainB.copy()
+    if len(partner_hurt):
+        partner_hurt = partner_hurt.apply(lambda v: max(0.0, -float(v)))
+    base_pair_sum = pd.to_numeric(df.get("base_pair_sum"), errors="coerce") if "base_pair_sum" in df.columns else pd.Series([], dtype=float)
+    base_pair_sum = base_pair_sum.dropna()
+
+    eps_cfg = None
+    cfg_eff = stage4_meta.get("config_effective_subset") or {}
+    if "svg_post_base_pair_budget_eps" in cfg_eff:
+        eps_cfg = cfg_eff.get("svg_post_base_pair_budget_eps")
+    if eps_cfg is None:
+        eps_cfg = (stage4_meta.get("svg_post_meta") or {}).get("base_pair_budget_eps")
+
+    report: Dict[str, Any] = {
+        "selected_actions_count": int(len(df)),
+        "changed_cells_count": int(len(changed_cells)),
+        "changed_spots_count": int(len(changed_spots)),
+        "gainA_mean": float(gainA.mean()) if len(gainA) else None,
+        "gainA_median": float(gainA.median()) if len(gainA) else None,
+        "gainA_pos_rate": float((gainA > 0).mean()) if len(gainA) else None,
+        "gainA_n": int(len(gainA)),
+        "gainB_mean": float(gainB.mean()) if len(gainB) else None,
+        "gainB_median": float(gainB.median()) if len(gainB) else None,
+        "gainB_neg_rate": float((gainB < 0).mean()) if len(gainB) else None,
+        "gainB_n": int(len(gainB)),
+        "gainSum_mean": float(gainSum.mean()) if len(gainSum) else None,
+        "gainSum_median": float(gainSum.median()) if len(gainSum) else None,
+        "gainSum_n": int(len(gainSum)),
+        "partner_hurt_sum": float(partner_hurt.sum()) if len(partner_hurt) else None,
+        "base_pair_sum_mean": float(base_pair_sum.mean()) if len(base_pair_sum) else None,
+        "base_pair_sum_max": float(base_pair_sum.max()) if len(base_pair_sum) else None,
+        "base_pair_sum_n": int(len(base_pair_sum)),
+        "base_pair_budget_eps": float(eps_cfg) if eps_cfg is not None else None,
+        "base_pair_sum_over_eps_count": int((base_pair_sum > float(eps_cfg)).sum()) if (len(base_pair_sum) and eps_cfg is not None) else None,
+    }
+
+    swap_mask = df.get("action_type", pd.Series([], dtype=str)).astype(str) == "swap"
+    swap_spots = set()
+    if "from_spot" in df.columns and "to_spot" in df.columns:
+        swap_spots = set(df.loc[swap_mask, "from_spot"].dropna().astype(str).tolist()) | set(
+            df.loc[swap_mask, "to_spot"].dropna().astype(str).tolist()
+        )
+    report["swap_spots_count"] = int(len(swap_spots))
+
+    if swap_spots:
+        svg_post_meta = stage4_meta.get("svg_post_meta") or {}
+        neighbor_k = int(svg_post_meta.get("neighbor_k") or 10)
+        neighbors = _build_spot_neighbors(st_coords, neighbor_k)
+        local_spots = _expand_spot_set(sorted(swap_spots), neighbors)
+        report["local_neighbor_k"] = int(neighbor_k)
+        report["local_spot_set_size"] = int(len(local_spots))
+
+        local_plus_metrics, local_plus_audit = _eval_local_spot_metrics(
+            pred_spot_type=pred_spot_type,
+            truth_spot_type=truth_spot_type,
+            st_coords=st_coords,
+            spot_ids=local_spots,
+            missing_spot_policy=missing_spot_policy,
+            renorm_policy=renorm_policy,
+            type_union_policy=type_union_policy,
+            epsilon=epsilon,
+            spot_subset_policy=spot_subset_policy,
+        )
+        report["local_spot_metrics_plus"] = local_plus_metrics
+        report["local_spot_metrics_plus_audit"] = local_plus_audit
+
+        local_base_metrics = None
+        if baseline_run and baseline_run.spot_type_fraction_path.exists():
+            base_pred, _ = _read_spot_type_fraction_any(baseline_run.spot_type_fraction_path)
+            local_base_metrics, _ = _eval_local_spot_metrics(
+                pred_spot_type=base_pred,
+                truth_spot_type=truth_spot_type,
+                st_coords=st_coords,
+                spot_ids=local_spots,
+                missing_spot_policy=missing_spot_policy,
+                renorm_policy=renorm_policy,
+                type_union_policy=type_union_policy,
+                epsilon=epsilon,
+                spot_subset_policy=spot_subset_policy,
+            )
+        report["local_spot_metrics_baseline"] = local_base_metrics
+        report["local_spot_metrics_delta"] = _metric_delta(
+            local_plus_metrics,
+            local_base_metrics,
+            keys=["L1_mean", "JS_mean", "KL_mean", "corr_mean"],
+        )
+    else:
+        report["local_spot_metrics_plus"] = None
+        report["local_spot_metrics_baseline"] = None
+        report["local_spot_metrics_delta"] = None
+        report["local_spot_set_size"] = 0
+        report["local_neighbor_k"] = None
+        report["local_skip_reason"] = "no_swap_spots"
+
+    return report
+
+
+def _build_type_post_report(
+    *,
+    run: Stage4RunRef,
+    stage4_meta: Dict[str, Any],
+    selected_actions: Optional[pd.DataFrame],
+    pred_spot_type: pd.DataFrame,
+    truth_spot_type: pd.DataFrame,
+    st_coords: pd.DataFrame,
+    baseline_run: Optional[Stage4RunRef],
+    missing_spot_policy: str,
+    renorm_policy: str,
+    type_union_policy: str,
+    epsilon: float,
+    spot_subset_policy: str,
+) -> Dict[str, Any]:
+    if run.mode != "plus":
+        return {"skip_reason": "mode_not_plus"}
+    if selected_actions is None or selected_actions.empty:
+        return {"skip_reason": "no_selected_type_actions"}
+
+    df = selected_actions.copy()
+    for col in ["cell_id", "partner_cell_id", "from_spot", "to_spot", "action_type"]:
+        if col in df.columns:
+            df[col] = df[col].astype(str)
+
+    cell_ids = set(df["cell_id"].dropna().astype(str).tolist()) if "cell_id" in df.columns else set()
+    partner_ids = set(df["partner_cell_id"].dropna().astype(str).tolist()) if "partner_cell_id" in df.columns else set()
+    changed_cells = cell_ids | partner_ids
+    spots_from = set(df["from_spot"].dropna().astype(str).tolist()) if "from_spot" in df.columns else set()
+    spots_to = set(df["to_spot"].dropna().astype(str).tolist()) if "to_spot" in df.columns else set()
+    changed_spots = spots_from | spots_to
+
+    gainA = pd.to_numeric(df.get("gainA"), errors="coerce") if "gainA" in df.columns else pd.Series([], dtype=float)
+    gainA = gainA.dropna()
+    gainB = pd.to_numeric(df.get("gainB"), errors="coerce") if "gainB" in df.columns else pd.Series([], dtype=float)
+    gainB = gainB.dropna()
+    gainSum = pd.to_numeric(df.get("gainSum"), errors="coerce") if "gainSum" in df.columns else pd.Series([], dtype=float)
+    gainSum = gainSum.dropna()
+    partner_hurt = gainB.copy()
+    if len(partner_hurt):
+        partner_hurt = partner_hurt.apply(lambda v: max(0.0, -float(v)))
+    base_pair_sum = pd.to_numeric(df.get("base_pair_sum"), errors="coerce") if "base_pair_sum" in df.columns else pd.Series([], dtype=float)
+    base_pair_sum = base_pair_sum.dropna()
+
+    eps_cfg = None
+    cfg_eff = stage4_meta.get("config_effective_subset") or {}
+    if "type_post_base_pair_budget_eps" in cfg_eff:
+        eps_cfg = cfg_eff.get("type_post_base_pair_budget_eps")
+    if eps_cfg is None:
+        eps_cfg = (stage4_meta.get("type_post_meta") or {}).get("base_pair_budget_eps")
+
+    report: Dict[str, Any] = {
+        "selected_actions_count": int(len(df)),
+        "changed_cells_count": int(len(changed_cells)),
+        "changed_spots_count": int(len(changed_spots)),
+        "type_gainA_mean": float(gainA.mean()) if len(gainA) else None,
+        "type_gainA_median": float(gainA.median()) if len(gainA) else None,
+        "type_gainA_pos_rate": float((gainA > 0).mean()) if len(gainA) else None,
+        "type_gainA_n": int(len(gainA)),
+        "type_gainB_mean": float(gainB.mean()) if len(gainB) else None,
+        "type_gainB_median": float(gainB.median()) if len(gainB) else None,
+        "type_gainB_neg_rate": float((gainB < 0).mean()) if len(gainB) else None,
+        "type_gainB_n": int(len(gainB)),
+        "type_gainSum_mean": float(gainSum.mean()) if len(gainSum) else None,
+        "type_gainSum_median": float(gainSum.median()) if len(gainSum) else None,
+        "type_gainSum_n": int(len(gainSum)),
+        "partner_hurt_type_sum": float(partner_hurt.sum()) if len(partner_hurt) else None,
+        "type_base_pair_sum_mean": float(base_pair_sum.mean()) if len(base_pair_sum) else None,
+        "type_base_pair_sum_max": float(base_pair_sum.max()) if len(base_pair_sum) else None,
+        "type_base_pair_sum_n": int(len(base_pair_sum)),
+        "type_base_pair_budget_eps": float(eps_cfg) if eps_cfg is not None else None,
+        "type_base_pair_sum_over_eps_count": int((base_pair_sum > float(eps_cfg)).sum())
+        if (len(base_pair_sum) and eps_cfg is not None)
+        else None,
+    }
+
+    swap_mask = df.get("action_type", pd.Series([], dtype=str)).astype(str) == "swap"
+    swap_spots = set()
+    if "from_spot" in df.columns and "to_spot" in df.columns:
+        swap_spots = set(df.loc[swap_mask, "from_spot"].dropna().astype(str).tolist()) | set(
+            df.loc[swap_mask, "to_spot"].dropna().astype(str).tolist()
+        )
+    report["swap_spots_count"] = int(len(swap_spots))
+
+    if swap_spots:
+        type_post_meta = stage4_meta.get("type_post_meta") or {}
+        neighbor_k = int(type_post_meta.get("neighbor_k") or cfg_eff.get("type_post_neighbor_k") or 10)
+        neighbors = _build_spot_neighbors(st_coords, neighbor_k)
+        local_spots = _expand_spot_set(sorted(swap_spots), neighbors)
+        report["local_neighbor_k"] = int(neighbor_k)
+        report["local_spot_set_size"] = int(len(local_spots))
+
+        local_plus_metrics, local_plus_audit = _eval_local_spot_metrics(
+            pred_spot_type=pred_spot_type,
+            truth_spot_type=truth_spot_type,
+            st_coords=st_coords,
+            spot_ids=local_spots,
+            missing_spot_policy=missing_spot_policy,
+            renorm_policy=renorm_policy,
+            type_union_policy=type_union_policy,
+            epsilon=epsilon,
+            spot_subset_policy=spot_subset_policy,
+        )
+        report["local_spot_metrics_plus"] = local_plus_metrics
+        report["local_spot_metrics_plus_audit"] = local_plus_audit
+
+        local_base_metrics = None
+        if baseline_run and baseline_run.spot_type_fraction_path.exists():
+            base_pred, _ = _read_spot_type_fraction_any(baseline_run.spot_type_fraction_path)
+            local_base_metrics, _ = _eval_local_spot_metrics(
+                pred_spot_type=base_pred,
+                truth_spot_type=truth_spot_type,
+                st_coords=st_coords,
+                spot_ids=local_spots,
+                missing_spot_policy=missing_spot_policy,
+                renorm_policy=renorm_policy,
+                type_union_policy=type_union_policy,
+                epsilon=epsilon,
+                spot_subset_policy=spot_subset_policy,
+            )
+        report["local_spot_metrics_baseline"] = local_base_metrics
+        report["local_spot_metrics_delta"] = _metric_delta(
+            local_plus_metrics,
+            local_base_metrics,
+            keys=["L1_mean", "JS_mean", "KL_mean", "corr_mean"],
+        )
+    else:
+        report["local_spot_metrics_plus"] = None
+        report["local_spot_metrics_baseline"] = None
+        report["local_spot_metrics_delta"] = None
+        report["local_spot_set_size"] = 0
+        report["local_neighbor_k"] = None
+        report["local_skip_reason"] = "no_swap_spots"
+
+    return report
+
+
 def evaluate_rare_diffusion(
     *,
     pred_spot_type: pd.DataFrame,
@@ -1116,6 +1489,11 @@ def run_stage5_for_scenario(
     if not runs_all:
         raise FileNotFoundError(f"[Stage5] run_list is empty (scenario={scenario_id}, backends={backends}); terminate per v1.2.1")
 
+    baseline_by_key: Dict[Tuple[str, Optional[str], Optional[int]], Stage4RunRef] = {}
+    for r in runs_all:
+        if str(r.mode).lower() == "baseline":
+            baseline_by_key[(r.backend, r.config_id, r.seed)] = r
+
     evaluator_meta = {
         "generated_at": _now_iso(),
         "evaluator_file": str(Path(__file__).resolve().as_posix()),
@@ -1176,6 +1554,7 @@ def run_stage5_for_scenario(
                 "scenario_id": scenario_id,
                 "gate_status": None,
                 "fail_reason": None,
+                "input_cell_assignment_sha1": _sha1_file(run.cell_assignment_path) if run.cell_assignment_path.exists() else None,
                 "run_provenance": {
                     "scenario_id": run.scenario_id,
                     "backend": run.backend,
@@ -1297,6 +1676,41 @@ def run_stage5_for_scenario(
                     "n_types": int(len(pred_spot_type.columns)),
                 }
 
+                stage4_meta = _read_json(run.meta_path) if run.meta_path and run.meta_path.exists() else {}
+                selected_actions, _ = _read_selected_actions(stage4_meta, run.run_dir)
+                selected_type_actions, _ = _read_selected_type_actions(stage4_meta, run.run_dir)
+                baseline_run = baseline_by_key.get((backend, run.config_id, run.seed))
+                incremental_report = _build_incremental_report(
+                    run=run,
+                    stage4_meta=stage4_meta,
+                    selected_actions=selected_actions,
+                    pred_spot_type=pred_spot_type,
+                    truth_spot_type=truth_spot_type,
+                    st_coords=st_coords,
+                    baseline_run=baseline_run,
+                    missing_spot_policy=missing_spot_policy,
+                    renorm_policy=renorm_policy,
+                    type_union_policy=type_union_policy,
+                    epsilon=divergence_epsilon,
+                    spot_subset_policy=spot_subset_policy,
+                )
+                type_post_report = _build_type_post_report(
+                    run=run,
+                    stage4_meta=stage4_meta,
+                    selected_actions=selected_type_actions,
+                    pred_spot_type=pred_spot_type,
+                    truth_spot_type=truth_spot_type,
+                    st_coords=st_coords,
+                    baseline_run=baseline_run,
+                    missing_spot_policy=missing_spot_policy,
+                    renorm_policy=renorm_policy,
+                    type_union_policy=type_union_policy,
+                    epsilon=divergence_epsilon,
+                    spot_subset_policy=spot_subset_policy,
+                )
+                if isinstance(incremental_report, dict):
+                    incremental_report["type_post_report"] = type_post_report
+
                 bad_spots = sorted(list(set(ca["spot_id"].dropna().astype(str)) - set(spot_ids)))
                 schema_audit["cell_assignment"]["n_bad_spot_ids"] = int(len(bad_spots))
                 schema_audit["cell_assignment"]["bad_spot_id_examples"] = bad_spots[:5]
@@ -1383,6 +1797,7 @@ def run_stage5_for_scenario(
                     "spot_type_audit": spot_type_audit,
                     "rare_diffusion": rare_metrics,
                     "unknown_behavior": unknown_metrics,
+                    "incremental_report": incremental_report,
                 }
 
             except IdAlignmentError as e:
@@ -1427,6 +1842,14 @@ def run_stage5_for_scenario(
             if isinstance(metrics_generic.get("unknown_behavior"), dict):
                 row["unknown_rate"] = metrics_generic["unknown_behavior"].get("unknown_rate")
                 row["missing_truth_to_unknown_rate"] = metrics_generic["unknown_behavior"].get("missing_truth_to_unknown_rate")
+            if isinstance(metrics_generic.get("incremental_report"), dict):
+                inc = metrics_generic["incremental_report"]
+                row["partner_hurt_sum"] = inc.get("partner_hurt_sum")
+                row["gainA_mean"] = inc.get("gainA_mean")
+                type_post_report = inc.get("type_post_report") if isinstance(inc.get("type_post_report"), dict) else None
+                if type_post_report:
+                    row["partner_hurt_type_sum"] = type_post_report.get("partner_hurt_type_sum")
+                    row["type_gainA_mean"] = type_post_report.get("type_gainA_mean")
             if meta:
                 row["stage4_meta_status"] = meta.get("status")
                 row["cell_id_space"] = meta.get("cell_id_space")

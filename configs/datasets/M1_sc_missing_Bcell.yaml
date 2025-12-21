@@ -1,4 +1,4 @@
-stage2:
+﻿stage2:
   plugin_genes_mode: union_hvg_svg
   hvg_nfeatures: 2000
   svg_cost_mode: linear
@@ -12,8 +12,9 @@ stage2:
   svg_cost_truth_metric: pearson
 mapping:
   cytospace:
+    strict_config: true
     svg_refine_lambda: 0
-    type_posterior_enabled: true
+    type_posterior_enabled: false
     type_post_mode: local_marker_swap
     type_post_marker_source: sc_auto_top
     type_post_markers_per_type: 30
@@ -44,8 +45,8 @@ mapping:
     prior_candidate_topk: 0
     prior_candidate_weight: 0.0
     abstain_unknown_sc_only: true
-    post_assign_adjust: true
-    svg_post_enabled: true
+    post_assign_adjust: false
+    svg_post_enabled: false
     svg_post_rounds: 1
     svg_post_neighbor_k: 10
     svg_post_alpha: 0.2
@@ -76,12 +77,12 @@ mapping:
     svg_post_swap_target_expand_k: 10
     cost_expr_norm: none
     cost_scale_beta: 0
-    spot_weight_mode: local_zscore
+    spot_weight_mode: none
     spot_weight_scale: exp
-    spot_weight_topk: 10
+    spot_weight_topk: 0
     spot_weight_k: 8
-    spot_weight_kappa: 0.08
-    spot_weight_weight_max: 1.2
+    spot_weight_kappa: 0.0
+    spot_weight_weight_max: 1.0
     spot_weight_only_up: true
     spot_weight_truth_filter: false
     default_config_id: spot_s0_basin_A

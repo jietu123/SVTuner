@@ -16,6 +16,7 @@ from scipy import sparse
 from scipy.sparse import coo_matrix, csr_matrix
 from scipy.spatial.distance import cdist
 from scipy.spatial import cKDTree
+from scipy.stats import rankdata
 
 # Stage4-plus（CytoSPACEBackend.run_plus）关键路径唯一入口（防回归）：
 # - soft matrix：_parse_assigned_locations -> _assignments_to_matrix
@@ -67,6 +68,39 @@ def _sha1_file(path: Path) -> Optional[str]:
         return None
 
 
+def _sha1_assignments(assignments: List[Tuple[int, int, float]]) -> Optional[str]:
+    try:
+        rows = sorted(assignments, key=lambda x: (int(x[0]), int(x[1])))
+        buf = "\n".join(f"{int(c)},{int(s)},{float(score):.8g}" for c, s, score in rows)
+        return hashlib.sha1(buf.encode("utf-8")).hexdigest().lower()
+    except Exception:
+        return None
+
+
+def _sha1_cost_inputs(
+    sc_vals: np.ndarray,
+    st_vals: np.ndarray,
+    capacity: np.ndarray,
+    *,
+    distance_metric: str,
+    solver_method: str,
+) -> Optional[str]:
+    try:
+        h = hashlib.sha1()
+        h.update(str(distance_metric).encode("utf-8"))
+        h.update(b"|")
+        h.update(str(solver_method).encode("utf-8"))
+        h.update(b"|")
+        h.update(np.asarray(capacity, dtype=np.int64).tobytes())
+        h.update(np.asarray(sc_vals.shape, dtype=np.int64).tobytes())
+        h.update(np.asarray(st_vals.shape, dtype=np.int64).tobytes())
+        h.update(np.ascontiguousarray(sc_vals, dtype=np.float64).tobytes())
+        h.update(np.ascontiguousarray(st_vals, dtype=np.float64).tobytes())
+        return h.hexdigest().lower()
+    except Exception:
+        return None
+
+
 _DEPRECATED_KEYS: Dict[str, str] = {
     "capacity_normalize_mode": "废弃/从未完整实现：请改用 cells_per_spot_* 族配置（cells_per_spot_source/clip/rounding）",
     "capacity_normalize_factor": "废弃：请改用 umi_to_cell_norm 或 default_cells_per_spot（配合 cells_per_spot_source）",
@@ -103,6 +137,32 @@ _USED_KEYS: set[str] = {
     "abstain_unknown_sc_only",
     "type_prior_apply_refine",
     "type_prior_apply_harden",
+    "type_posterior_enabled",
+    "type_post_mode",
+    "type_post_marker_source",
+    "type_post_marker_list",
+    "type_post_markers_per_type",
+    "type_post_gene_weighting",
+    "type_post_require_gainA_positive",
+    "type_post_rounds",
+    "type_post_neighbor_k",
+    "type_post_max_changed_cells",
+    "type_post_selection_mode",
+    "type_post_action_topm",
+    "type_post_allow_swap",
+    "type_post_delta_min",
+    "type_post_base_margin_tau",
+    "type_post_swap_target_topk",
+    "type_post_swap_scope",
+    "type_post_swap_base_mode",
+    "type_post_base_pair_budget_eps",
+    "type_post_max_swaps_per_round",
+    "type_post_partner_hurt_max",
+    "type_post_max_high_hurt_actions",
+    "type_post_high_hurt_threshold",
+    "type_post_lambda_partner_hurt",
+    "type_post_lambda_partner",
+    "type_post_lambda_base",
     "knn_metric",
     "knn_block_size",
     "knn_max_dense_n",
@@ -112,6 +172,41 @@ _USED_KEYS: set[str] = {
     "max_cells_missing_type_prior_ratio",
     "min_prior_row_nonzero_ratio",
     "post_assign_adjust",
+    "svg_post_enabled",
+    "svg_post_rounds",
+    "svg_post_neighbor_k",
+    "svg_post_alpha",
+    "svg_post_max_move_frac",
+    "svg_post_max_changed_cells",
+    "svg_post_selection_mode",
+    "svg_post_action_topm",
+    "svg_post_sort_key",
+    "svg_post_lambda_partner_hurt",
+    "svg_post_lambda_base",
+    "svg_post_lambda_type_shift",
+    "svg_post_lambda_type_penalty",
+    "svg_post_lambda_type_penalty",
+    "svg_post_allow_swap",
+    "svg_post_delta_min",
+    "svg_post_weight_clip_max",
+    "svg_post_base_margin_tau",
+    "svg_post_require_delta_base_nonpositive",
+    "svg_post_uncertain_margin_tau",
+    "svg_post_swap_delta_min",
+    "svg_post_swap_require_delta_base_nonpositive",
+    "svg_post_swap_depth",
+    "svg_post_swap_only_within_tieset",
+    "svg_post_max_swaps_per_round",
+    "svg_post_swap_require_delta_base_nonpositive_for_both",
+    "svg_post_swap_base_mode",
+    "svg_post_base_pair_budget_eps",
+    "svg_post_swap_scope",
+    "svg_post_swap_partner_topm",
+    "svg_post_swap_target_topk",
+    "svg_post_swap_target_expand_mode",
+    "svg_post_swap_target_expand_k",
+    "svg_post_swap_target_expand_mode",
+    "svg_post_swap_target_expand_k",
     "cost_expr_norm",
     "cost_expr_norm_eps",
     "cost_scale_source",
@@ -161,6 +256,30 @@ _CONFIG_EFFECTIVE_KEYS: list[str] = [
     "abstain_unknown_sc_only",
     "type_prior_apply_refine",
     "type_prior_apply_harden",
+    "type_posterior_enabled",
+    "type_post_mode",
+    "type_post_marker_source",
+    "type_post_markers_per_type",
+    "type_post_gene_weighting",
+    "type_post_require_gainA_positive",
+    "type_post_rounds",
+    "type_post_neighbor_k",
+    "type_post_max_changed_cells",
+    "type_post_selection_mode",
+    "type_post_action_topm",
+    "type_post_allow_swap",
+    "type_post_delta_min",
+    "type_post_base_margin_tau",
+    "type_post_swap_target_topk",
+    "type_post_swap_scope",
+    "type_post_swap_base_mode",
+    "type_post_base_pair_budget_eps",
+    "type_post_max_swaps_per_round",
+    "type_post_partner_hurt_max",
+    "type_post_max_high_hurt_actions",
+    "type_post_high_hurt_threshold",
+    "type_post_lambda_partner",
+    "type_post_lambda_base",
     "prior_ablation_enabled",
     "knn_metric",
     "knn_block_size",
@@ -170,6 +289,35 @@ _CONFIG_EFFECTIVE_KEYS: list[str] = [
     "max_cells_missing_type_prior_ratio",
     "min_prior_row_nonzero_ratio",
     "post_assign_adjust",
+    "svg_post_enabled",
+    "svg_post_rounds",
+    "svg_post_neighbor_k",
+    "svg_post_alpha",
+    "svg_post_max_move_frac",
+    "svg_post_max_changed_cells",
+    "svg_post_selection_mode",
+    "svg_post_action_topm",
+    "svg_post_sort_key",
+    "svg_post_lambda_partner_hurt",
+    "svg_post_lambda_base",
+    "svg_post_lambda_type_shift",
+    "svg_post_allow_swap",
+    "svg_post_delta_min",
+    "svg_post_weight_clip_max",
+    "svg_post_base_margin_tau",
+    "svg_post_require_delta_base_nonpositive",
+    "svg_post_uncertain_margin_tau",
+    "svg_post_swap_delta_min",
+    "svg_post_swap_require_delta_base_nonpositive",
+    "svg_post_swap_depth",
+    "svg_post_swap_only_within_tieset",
+    "svg_post_max_swaps_per_round",
+    "svg_post_swap_require_delta_base_nonpositive_for_both",
+    "svg_post_swap_base_mode",
+    "svg_post_base_pair_budget_eps",
+    "svg_post_swap_scope",
+    "svg_post_swap_partner_topm",
+    "svg_post_swap_target_topk",
     "cost_expr_norm",
     "cost_expr_norm_eps",
     "cost_scale_source",
@@ -437,8 +585,289 @@ def _validate_and_resolve_config(config: Dict[str, Any], *, context: str) -> Tup
     for k in ("type_prior_apply_refine", "type_prior_apply_harden", "prior_ablation_enabled"):
         if k in cfg and cfg[k] is not None:
             cfg[k] = _as_bool(cfg[k], k)
+    if "type_posterior_enabled" in cfg and cfg["type_posterior_enabled"] is not None:
+        cfg["type_posterior_enabled"] = _as_bool(cfg["type_posterior_enabled"], "type_posterior_enabled")
+    if "type_post_mode" in cfg and cfg["type_post_mode"] is not None:
+        mode = str(cfg["type_post_mode"]).strip().lower()
+        if mode in ("", "off", "none"):
+            cfg["type_post_mode"] = None
+        else:
+            allowed = {"local_prior_swap", "local_marker_swap"}
+            if mode not in allowed:
+                raise ValueError(f"[{context}] invalid type_post_mode={mode!r}; allowed={sorted(allowed)}")
+            cfg["type_post_mode"] = mode
+    if "type_post_marker_source" in cfg and cfg["type_post_marker_source"] is not None:
+        source = str(cfg["type_post_marker_source"]).strip().lower()
+        if source in ("", "off", "none"):
+            cfg["type_post_marker_source"] = None
+        else:
+            allowed = {"sc_auto_top", "yaml_marker_list"}
+            if source not in allowed:
+                raise ValueError(f"[{context}] invalid type_post_marker_source={source!r}; allowed={sorted(allowed)}")
+            cfg["type_post_marker_source"] = source
+    if "type_post_marker_list" in cfg and cfg["type_post_marker_list"] is not None:
+        marker_list = cfg["type_post_marker_list"]
+        if not isinstance(marker_list, (str, dict)):
+            raise ValueError(f"[{context}] invalid type_post_marker_list={type(marker_list).__name__}")
+    if "type_post_markers_per_type" in cfg and cfg["type_post_markers_per_type"] is not None:
+        cfg["type_post_markers_per_type"] = _as_int(
+            cfg["type_post_markers_per_type"], "type_post_markers_per_type", min_v=1
+        )
+    if "type_post_gene_weighting" in cfg and cfg["type_post_gene_weighting"] is not None:
+        mode = str(cfg["type_post_gene_weighting"]).strip().lower()
+        allowed = {"spot_zscore", "none"}
+        if mode not in allowed:
+            raise ValueError(f"[{context}] invalid type_post_gene_weighting={mode!r}; allowed={sorted(allowed)}")
+        cfg["type_post_gene_weighting"] = mode
+    if "type_post_require_gainA_positive" in cfg and cfg["type_post_require_gainA_positive"] is not None:
+        cfg["type_post_require_gainA_positive"] = _as_bool(
+            cfg["type_post_require_gainA_positive"], "type_post_require_gainA_positive"
+        )
+    if "type_post_rounds" in cfg and cfg["type_post_rounds"] is not None:
+        cfg["type_post_rounds"] = _as_int(cfg["type_post_rounds"], "type_post_rounds", min_v=0)
+    if "type_post_neighbor_k" in cfg and cfg["type_post_neighbor_k"] is not None:
+        cfg["type_post_neighbor_k"] = _as_int(cfg["type_post_neighbor_k"], "type_post_neighbor_k", min_v=0)
+    if "type_post_max_changed_cells" in cfg:
+        if cfg["type_post_max_changed_cells"] in (None, ""):
+            cfg["type_post_max_changed_cells"] = None
+        else:
+            cfg["type_post_max_changed_cells"] = _as_int(
+                cfg["type_post_max_changed_cells"], "type_post_max_changed_cells", min_v=0
+            )
+    if "type_post_selection_mode" in cfg and cfg["type_post_selection_mode"] is not None:
+        mode = str(cfg["type_post_selection_mode"]).strip().lower()
+        allowed = {"sequential_greedy", "global_pool_greedy"}
+        if mode not in allowed:
+            raise ValueError(f"[{context}] invalid type_post_selection_mode={mode!r}; allowed={sorted(allowed)}")
+        cfg["type_post_selection_mode"] = mode
+    if "type_post_action_topm" in cfg:
+        if cfg["type_post_action_topm"] in (None, ""):
+            cfg["type_post_action_topm"] = None
+        else:
+            cfg["type_post_action_topm"] = _as_int(cfg["type_post_action_topm"], "type_post_action_topm", min_v=1)
+    if "type_post_allow_swap" in cfg and cfg["type_post_allow_swap"] is not None:
+        cfg["type_post_allow_swap"] = _as_bool(cfg["type_post_allow_swap"], "type_post_allow_swap")
+    if "type_post_delta_min" in cfg and cfg["type_post_delta_min"] is not None:
+        cfg["type_post_delta_min"] = _as_float(cfg["type_post_delta_min"], "type_post_delta_min", min_v=0.0)
+    if "type_post_base_margin_tau" in cfg:
+        if cfg["type_post_base_margin_tau"] in (None, ""):
+            cfg["type_post_base_margin_tau"] = None
+        else:
+            cfg["type_post_base_margin_tau"] = _as_float(
+                cfg["type_post_base_margin_tau"], "type_post_base_margin_tau", min_v=0.0
+            )
+    if "type_post_swap_target_topk" in cfg:
+        if cfg["type_post_swap_target_topk"] in (None, ""):
+            cfg["type_post_swap_target_topk"] = None
+        else:
+            cfg["type_post_swap_target_topk"] = _as_int(
+                cfg["type_post_swap_target_topk"], "type_post_swap_target_topk", min_v=1
+            )
+    if "type_post_swap_scope" in cfg and cfg["type_post_swap_scope"] is not None:
+        scope = str(cfg["type_post_swap_scope"]).strip().lower()
+        allowed_scope = {"a_tieset_only", "a_and_b_tieset"}
+        if scope not in allowed_scope:
+            raise ValueError(f"[{context}] invalid type_post_swap_scope={scope!r}; allowed={sorted(allowed_scope)}")
+        cfg["type_post_swap_scope"] = scope
+    if "type_post_swap_base_mode" in cfg and cfg["type_post_swap_base_mode"] is not None:
+        mode = str(cfg["type_post_swap_base_mode"]).strip().lower()
+        allowed_mode = {"both_nonpositive", "pair_budget"}
+        if mode not in allowed_mode:
+            raise ValueError(f"[{context}] invalid type_post_swap_base_mode={mode!r}; allowed={sorted(allowed_mode)}")
+        cfg["type_post_swap_base_mode"] = mode
+    if "type_post_base_pair_budget_eps" in cfg and cfg["type_post_base_pair_budget_eps"] is not None:
+        cfg["type_post_base_pair_budget_eps"] = _as_float(
+            cfg["type_post_base_pair_budget_eps"], "type_post_base_pair_budget_eps", min_v=0.0
+        )
+    if "type_post_max_swaps_per_round" in cfg:
+        if cfg["type_post_max_swaps_per_round"] in (None, ""):
+            cfg["type_post_max_swaps_per_round"] = None
+        else:
+            cfg["type_post_max_swaps_per_round"] = _as_int(
+                cfg["type_post_max_swaps_per_round"], "type_post_max_swaps_per_round", min_v=0
+            )
+    if "type_post_partner_hurt_max" in cfg and cfg["type_post_partner_hurt_max"] is not None:
+        cfg["type_post_partner_hurt_max"] = _as_float(
+            cfg["type_post_partner_hurt_max"], "type_post_partner_hurt_max", min_v=0.0
+        )
+    if "type_post_max_high_hurt_actions" in cfg:
+        if cfg["type_post_max_high_hurt_actions"] in (None, ""):
+            cfg["type_post_max_high_hurt_actions"] = None
+        else:
+            cfg["type_post_max_high_hurt_actions"] = _as_int(
+                cfg["type_post_max_high_hurt_actions"], "type_post_max_high_hurt_actions", min_v=0
+            )
+    if "type_post_high_hurt_threshold" in cfg and cfg["type_post_high_hurt_threshold"] is not None:
+        cfg["type_post_high_hurt_threshold"] = _as_float(
+            cfg["type_post_high_hurt_threshold"], "type_post_high_hurt_threshold", min_v=0.0
+        )
+    if "type_post_lambda_partner_hurt" in cfg and cfg["type_post_lambda_partner_hurt"] is not None:
+        cfg["type_post_lambda_partner_hurt"] = _as_float(
+            cfg["type_post_lambda_partner_hurt"], "type_post_lambda_partner_hurt", min_v=0.0
+        )
+    if "type_post_lambda_partner" in cfg and cfg["type_post_lambda_partner"] is not None:
+        cfg["type_post_lambda_partner"] = _as_float(
+            cfg["type_post_lambda_partner"], "type_post_lambda_partner", min_v=0.0
+        )
+    if cfg.get("type_post_lambda_partner_hurt") is not None:
+        if cfg.get("type_post_lambda_partner") is None:
+            cfg["type_post_lambda_partner"] = cfg["type_post_lambda_partner_hurt"]
+        elif float(cfg["type_post_lambda_partner"]) != float(cfg["type_post_lambda_partner_hurt"]):
+            raise ValueError(f"[{context}] type_post_lambda_partner conflicts with type_post_lambda_partner_hurt")
+    if "type_post_lambda_base" in cfg and cfg["type_post_lambda_base"] is not None:
+        cfg["type_post_lambda_base"] = _as_float(cfg["type_post_lambda_base"], "type_post_lambda_base", min_v=0.0)
     if "post_assign_adjust" in cfg and cfg["post_assign_adjust"] is not None:
         cfg["post_assign_adjust"] = _as_bool(cfg["post_assign_adjust"], "post_assign_adjust")
+    if "svg_post_enabled" in cfg and cfg["svg_post_enabled"] is not None:
+        cfg["svg_post_enabled"] = _as_bool(cfg["svg_post_enabled"], "svg_post_enabled")
+    if "svg_post_rounds" in cfg and cfg["svg_post_rounds"] is not None:
+        cfg["svg_post_rounds"] = _as_int(cfg["svg_post_rounds"], "svg_post_rounds", min_v=0)
+    if "svg_post_neighbor_k" in cfg and cfg["svg_post_neighbor_k"] is not None:
+        cfg["svg_post_neighbor_k"] = _as_int(cfg["svg_post_neighbor_k"], "svg_post_neighbor_k", min_v=0)
+    if "svg_post_alpha" in cfg and cfg["svg_post_alpha"] is not None:
+        cfg["svg_post_alpha"] = _as_float(cfg["svg_post_alpha"], "svg_post_alpha", min_v=0.0, max_v=1.0)
+    if "svg_post_max_move_frac" in cfg and cfg["svg_post_max_move_frac"] is not None:
+        cfg["svg_post_max_move_frac"] = _as_float(cfg["svg_post_max_move_frac"], "svg_post_max_move_frac", min_v=0.0, max_v=1.0)
+    if "svg_post_max_changed_cells" in cfg:
+        if cfg["svg_post_max_changed_cells"] in (None, ""):
+            cfg["svg_post_max_changed_cells"] = None
+        else:
+            cfg["svg_post_max_changed_cells"] = _as_int(cfg["svg_post_max_changed_cells"], "svg_post_max_changed_cells", min_v=0)
+    if "svg_post_selection_mode" in cfg and cfg["svg_post_selection_mode"] is not None:
+        mode = str(cfg["svg_post_selection_mode"]).strip().lower()
+        allowed = {"sequential_greedy", "global_pool_greedy"}
+        if mode not in allowed:
+            raise ValueError(f"[{context}] invalid svg_post_selection_mode={mode!r}; allowed={sorted(allowed)}")
+        cfg["svg_post_selection_mode"] = mode
+    if "svg_post_action_topm" in cfg:
+        if cfg["svg_post_action_topm"] in (None, ""):
+            cfg["svg_post_action_topm"] = None
+        else:
+            cfg["svg_post_action_topm"] = _as_int(cfg["svg_post_action_topm"], "svg_post_action_topm", min_v=1)
+    if "svg_post_sort_key" in cfg and cfg["svg_post_sort_key"] is not None:
+        sort_key = str(cfg["svg_post_sort_key"]).strip().lower()
+        if sort_key in ("gainsum", "gain_sum"):
+            sort_key = "gainsum"
+        elif sort_key in ("gaina", "gain_a"):
+            sort_key = "gaina"
+        allowed = {"gainA_penalized", "gainsum", "gaina"}
+        if sort_key not in {k.lower() for k in allowed}:
+            raise ValueError(f"[{context}] invalid svg_post_sort_key={sort_key!r}; allowed={sorted(allowed)}")
+        if sort_key == "gaina":
+            cfg["svg_post_sort_key"] = "gainA"
+        elif sort_key == "gainsum":
+            cfg["svg_post_sort_key"] = "gainSum"
+        else:
+            cfg["svg_post_sort_key"] = "gainA_penalized"
+    if "svg_post_lambda_partner_hurt" in cfg and cfg["svg_post_lambda_partner_hurt"] is not None:
+        cfg["svg_post_lambda_partner_hurt"] = _as_float(
+            cfg["svg_post_lambda_partner_hurt"], "svg_post_lambda_partner_hurt", min_v=0.0
+        )
+    if "svg_post_lambda_base" in cfg and cfg["svg_post_lambda_base"] is not None:
+        cfg["svg_post_lambda_base"] = _as_float(cfg["svg_post_lambda_base"], "svg_post_lambda_base", min_v=0.0)
+    if "svg_post_lambda_type_shift" in cfg and cfg["svg_post_lambda_type_shift"] is not None:
+        cfg["svg_post_lambda_type_shift"] = _as_float(
+            cfg["svg_post_lambda_type_shift"], "svg_post_lambda_type_shift", min_v=0.0
+        )
+    if "svg_post_lambda_type_penalty" in cfg and cfg["svg_post_lambda_type_penalty"] is not None:
+        cfg["svg_post_lambda_type_penalty"] = _as_float(
+            cfg["svg_post_lambda_type_penalty"], "svg_post_lambda_type_penalty", min_v=0.0
+        )
+        if cfg.get("svg_post_lambda_type_shift") is None:
+            cfg["svg_post_lambda_type_shift"] = cfg["svg_post_lambda_type_penalty"]
+        elif float(cfg["svg_post_lambda_type_shift"]) != float(cfg["svg_post_lambda_type_penalty"]):
+            raise ValueError(
+                f"[{context}] svg_post_lambda_type_shift conflicts with svg_post_lambda_type_penalty"
+            )
+    if "svg_post_allow_swap" in cfg and cfg["svg_post_allow_swap"] is not None:
+        cfg["svg_post_allow_swap"] = _as_bool(cfg["svg_post_allow_swap"], "svg_post_allow_swap")
+    if "svg_post_delta_min" in cfg and cfg["svg_post_delta_min"] is not None:
+        cfg["svg_post_delta_min"] = _as_float(cfg["svg_post_delta_min"], "svg_post_delta_min", min_v=0.0)
+    if "svg_post_weight_clip_max" in cfg and cfg["svg_post_weight_clip_max"] is not None:
+        cfg["svg_post_weight_clip_max"] = _as_float(cfg["svg_post_weight_clip_max"], "svg_post_weight_clip_max", min_v=1.0)
+    if "svg_post_base_margin_tau" in cfg:
+        if cfg["svg_post_base_margin_tau"] in (None, ""):
+            cfg["svg_post_base_margin_tau"] = None
+        else:
+            cfg["svg_post_base_margin_tau"] = _as_float(cfg["svg_post_base_margin_tau"], "svg_post_base_margin_tau", min_v=0.0)
+    if "svg_post_require_delta_base_nonpositive" in cfg and cfg["svg_post_require_delta_base_nonpositive"] is not None:
+        cfg["svg_post_require_delta_base_nonpositive"] = _as_bool(
+            cfg["svg_post_require_delta_base_nonpositive"], "svg_post_require_delta_base_nonpositive"
+        )
+    if "svg_post_uncertain_margin_tau" in cfg:
+        if cfg["svg_post_uncertain_margin_tau"] in (None, ""):
+            cfg["svg_post_uncertain_margin_tau"] = None
+        else:
+            cfg["svg_post_uncertain_margin_tau"] = _as_float(
+                cfg["svg_post_uncertain_margin_tau"], "svg_post_uncertain_margin_tau", min_v=0.0
+            )
+    if "svg_post_swap_delta_min" in cfg and cfg["svg_post_swap_delta_min"] is not None:
+        cfg["svg_post_swap_delta_min"] = _as_float(cfg["svg_post_swap_delta_min"], "svg_post_swap_delta_min", min_v=0.0)
+    if "svg_post_swap_require_delta_base_nonpositive" in cfg and cfg["svg_post_swap_require_delta_base_nonpositive"] is not None:
+        cfg["svg_post_swap_require_delta_base_nonpositive"] = _as_bool(
+            cfg["svg_post_swap_require_delta_base_nonpositive"], "svg_post_swap_require_delta_base_nonpositive"
+        )
+    if "svg_post_swap_depth" in cfg and cfg["svg_post_swap_depth"] is not None:
+        cfg["svg_post_swap_depth"] = _as_int(cfg["svg_post_swap_depth"], "svg_post_swap_depth", min_v=1)
+        if cfg["svg_post_swap_depth"] != 1:
+            raise ValueError(f"[{context}] svg_post_swap_depth>1 not supported yet")
+    if "svg_post_swap_only_within_tieset" in cfg and cfg["svg_post_swap_only_within_tieset"] is not None:
+        cfg["svg_post_swap_only_within_tieset"] = _as_bool(cfg["svg_post_swap_only_within_tieset"], "svg_post_swap_only_within_tieset")
+    if "svg_post_max_swaps_per_round" in cfg:
+        if cfg["svg_post_max_swaps_per_round"] in (None, ""):
+            cfg["svg_post_max_swaps_per_round"] = None
+        else:
+            cfg["svg_post_max_swaps_per_round"] = _as_int(cfg["svg_post_max_swaps_per_round"], "svg_post_max_swaps_per_round", min_v=0)
+    if "svg_post_swap_require_delta_base_nonpositive_for_both" in cfg and cfg["svg_post_swap_require_delta_base_nonpositive_for_both"] is not None:
+        cfg["svg_post_swap_require_delta_base_nonpositive_for_both"] = _as_bool(
+            cfg["svg_post_swap_require_delta_base_nonpositive_for_both"],
+            "svg_post_swap_require_delta_base_nonpositive_for_both",
+        )
+        if cfg.get("svg_post_swap_require_delta_base_nonpositive") is not None and cfg.get("svg_post_swap_require_delta_base_nonpositive") != cfg["svg_post_swap_require_delta_base_nonpositive_for_both"]:
+            raise ValueError(
+                f"[{context}] svg_post_swap_require_delta_base_nonpositive conflicts with svg_post_swap_require_delta_base_nonpositive_for_both"
+            )
+        cfg["svg_post_swap_require_delta_base_nonpositive"] = cfg["svg_post_swap_require_delta_base_nonpositive_for_both"]
+    if "svg_post_swap_base_mode" in cfg and cfg["svg_post_swap_base_mode"] is not None:
+        mode = str(cfg["svg_post_swap_base_mode"]).strip().lower()
+        allowed_mode = {"both_nonpositive", "pair_budget"}
+        if mode not in allowed_mode:
+            raise ValueError(f"[{context}] invalid svg_post_swap_base_mode={mode!r}; allowed={sorted(allowed_mode)}")
+        cfg["svg_post_swap_base_mode"] = mode
+    if "svg_post_base_pair_budget_eps" in cfg and cfg["svg_post_base_pair_budget_eps"] is not None:
+        cfg["svg_post_base_pair_budget_eps"] = _as_float(
+            cfg["svg_post_base_pair_budget_eps"], "svg_post_base_pair_budget_eps", min_v=0.0
+        )
+    if "svg_post_swap_scope" in cfg and cfg["svg_post_swap_scope"] is not None:
+        scope = str(cfg["svg_post_swap_scope"]).strip().lower()
+        allowed_scope = {"a_tieset_only", "a_and_b_tieset"}
+        if scope not in allowed_scope:
+            raise ValueError(f"[{context}] invalid svg_post_swap_scope={scope!r}; allowed={sorted(allowed_scope)}")
+        cfg["svg_post_swap_scope"] = scope
+    if "svg_post_swap_partner_topm" in cfg:
+        if cfg["svg_post_swap_partner_topm"] in (None, ""):
+            cfg["svg_post_swap_partner_topm"] = None
+        else:
+            cfg["svg_post_swap_partner_topm"] = _as_int(
+                cfg["svg_post_swap_partner_topm"], "svg_post_swap_partner_topm", min_v=0
+            )
+    if "svg_post_swap_target_topk" in cfg:
+        if cfg["svg_post_swap_target_topk"] in (None, ""):
+            cfg["svg_post_swap_target_topk"] = None
+        else:
+            cfg["svg_post_swap_target_topk"] = _as_int(
+                cfg["svg_post_swap_target_topk"], "svg_post_swap_target_topk", min_v=1
+            )
+    if "svg_post_swap_target_expand_mode" in cfg and cfg["svg_post_swap_target_expand_mode"] is not None:
+        mode = str(cfg["svg_post_swap_target_expand_mode"]).strip().lower()
+        allowed_mode = {"none", "neighbor_knn"}
+        if mode not in allowed_mode:
+            raise ValueError(f"[{context}] invalid svg_post_swap_target_expand_mode={mode!r}; allowed={sorted(allowed_mode)}")
+        cfg["svg_post_swap_target_expand_mode"] = mode
+    if "svg_post_swap_target_expand_k" in cfg and cfg["svg_post_swap_target_expand_k"] is not None:
+        cfg["svg_post_swap_target_expand_k"] = _as_int(cfg["svg_post_swap_target_expand_k"], "svg_post_swap_target_expand_k", min_v=0)
+    if cfg.get("svg_post_swap_base_mode") == "pair_budget" and cfg.get("svg_post_swap_require_delta_base_nonpositive_for_both"):
+        raise ValueError(f"[{context}] svg_post_swap_base_mode=pair_budget conflicts with swap_require_delta_base_nonpositive_for_both")
 
     if "cells_per_spot_clip_min" in cfg and cfg["cells_per_spot_clip_min"] is not None:
         cfg["cells_per_spot_clip_min"] = _as_int(cfg["cells_per_spot_clip_min"], "cells_per_spot_clip_min", min_v=0)
@@ -546,6 +975,14 @@ def _load_stage3(stage3_dir: Path):
         raise ValueError("cell_type_relabel.csv 需要包含列 cell_id 与 plugin_type")
     type_prior = pd.read_csv(type_prior_path, index_col=0)
     return relabel, type_prior
+
+
+def _load_stage3_relabel(stage3_dir: Path):
+    relabel_path = stage3_dir / "cell_type_relabel.csv"
+    relabel = pd.read_csv(relabel_path)
+    if "cell_id" not in relabel.columns or "plugin_type" not in relabel.columns:
+        raise ValueError("cell_type_relabel.csv éœ€è¦åŒ…å«åˆ— cell_id ä¸?plugin_type")
+    return relabel
 
 
 def _compute_cells_per_spot(st_coords: pd.DataFrame, cfg: Dict[str, Any]) -> Tuple[pd.Series, str, Optional[float]]:
@@ -1426,6 +1863,1938 @@ def _refine_spot_cell_matrix_svg(
     return mat_ref, knn_mode
 
 
+def _build_spot_neighbor_sets(st_coords: pd.DataFrame, k: int) -> List[List[int]]:
+    xy = st_coords[["row", "col"]].to_numpy(dtype=float)
+    n = xy.shape[0]
+    if n == 0:
+        return []
+    k_eff = min(int(k), max(n - 1, 0))
+    if k_eff <= 0:
+        return [[] for _ in range(n)]
+    tree = cKDTree(xy)
+    _, idx = tree.query(xy, k=k_eff + 1)
+    if idx.ndim == 1:
+        idx = idx.reshape(-1, 1)
+    neighbors = [set(row[1:]) for row in idx]
+    for i, nbrs in enumerate(neighbors):
+        for j in list(nbrs):
+            neighbors[j].add(i)
+    return [sorted(list(nbrs)) for nbrs in neighbors]
+
+
+def _svg_posterior_local_refine(
+    assignments: List[Tuple[int, int, float]],
+    *,
+    distance_metric: str,
+    sc_cost: pd.DataFrame,
+    st_cost: pd.DataFrame,
+    st_coords: pd.DataFrame,
+    pool_orig_ids: List[str],
+    cell_types: List[str],
+    spot_ids: List[str],
+    plugin_genes: List[str],
+    genes_use: List[str],
+    w_full: np.ndarray,
+    spot_weight_matrix: Optional[np.ndarray],
+    capacity: np.ndarray,
+    neighbor_k: int,
+    rounds: int,
+    alpha: float,
+    max_move_frac: float,
+    max_changed_cells: Optional[int],
+    selection_mode: str,
+    action_topm: Optional[int],
+    sort_key: str,
+    lambda_partner_hurt: float,
+    lambda_base: float,
+    lambda_type_shift: float,
+    allow_swap: bool,
+    delta_min: float,
+    weight_clip_max: float,
+    base_margin_tau: Optional[float],
+    require_delta_base_nonpositive: bool,
+    uncertain_margin_tau: Optional[float],
+    swap_delta_min: float,
+    swap_require_delta_base_nonpositive: bool,
+    swap_depth: int,
+    swap_only_within_tieset: bool,
+    max_swaps_per_round: Optional[int],
+    swap_base_mode: str,
+    base_pair_budget_eps: float,
+    swap_scope: str,
+    swap_partner_topm: Optional[int],
+    swap_target_topk: Optional[int],
+    swap_target_expand_mode: str,
+    swap_target_expand_k: int,
+) -> Tuple[List[Tuple[int, int, float]], csr_matrix, Dict[str, Any]]:
+    meta = {
+        "status": "skipped",
+        "skip_reason": None,
+        "rounds_requested": int(rounds),
+        "rounds_executed": 0,
+        "neighbor_k": int(neighbor_k),
+        "alpha": float(alpha),
+        "max_move_frac": float(max_move_frac),
+        "max_changed_cells": int(max_changed_cells) if max_changed_cells is not None else None,
+        "selection_mode": str(selection_mode),
+        "action_topm": int(action_topm) if action_topm is not None else None,
+        "sort_key": str(sort_key),
+        "lambda_partner_hurt": float(lambda_partner_hurt),
+        "lambda_base": float(lambda_base),
+        "lambda_type_shift": float(lambda_type_shift),
+        "allow_swap": bool(allow_swap),
+        "delta_min": float(delta_min),
+        "weight_clip_max": float(weight_clip_max),
+        "base_distance_metric": str(distance_metric),
+        "base_margin_tau": float(base_margin_tau) if base_margin_tau is not None else None,
+        "require_delta_base_nonpositive": bool(require_delta_base_nonpositive),
+        "uncertain_margin_tau": float(uncertain_margin_tau) if uncertain_margin_tau is not None else None,
+        "swap_delta_min": float(swap_delta_min),
+        "swap_require_delta_base_nonpositive": bool(swap_require_delta_base_nonpositive),
+        "swap_require_delta_base_nonpositive_for_both": bool(swap_require_delta_base_nonpositive),
+        "swap_depth": int(swap_depth),
+        "swap_only_within_tieset": bool(swap_only_within_tieset),
+        "max_swaps_per_round": int(max_swaps_per_round) if max_swaps_per_round is not None else None,
+        "swap_base_mode": str(swap_base_mode),
+        "base_pair_budget_eps": float(base_pair_budget_eps),
+        "swap_scope": str(swap_scope),
+        "swap_partner_topm": int(swap_partner_topm) if swap_partner_topm is not None else None,
+        "swap_target_topk": int(swap_target_topk) if swap_target_topk is not None else None,
+        "swap_target_expand_mode": str(swap_target_expand_mode),
+        "swap_target_expand_k": int(swap_target_expand_k),
+        "n_cells": int(len(pool_orig_ids)),
+        "n_spots": int(len(spot_ids)),
+        "n_svg_genes": None,
+        "n_candidates_total": 0,
+        "n_proposals_total": 0,
+        "n_moves_total": 0,
+        "n_swaps_total": 0,
+        "moves_per_round": [],
+        "n_cells_skipped_base_margin": 0,
+        "n_cells_skipped_uncertain_margin": 0,
+        "n_cells_skipped_base_delta": 0,
+        "n_cells_eligible_tiebreak": 0,
+        "n_cells_blocked_delta_base": 0,
+        "n_moves_due_svg": 0,
+        "n_cells_tieset_size_ge2": 0,
+        "n_cells_has_target_with_free_capacity": 0,
+        "n_cells_blocked_capacity": 0,
+        "n_cells_blocked_swap_no_partner": 0,
+        "n_cells_blocked_swap_no_candidate": 0,
+        "n_cells_blocked_swap_svg_gain": 0,
+        "n_cells_blocked_swap_conflict": 0,
+        "n_cells_svg_prefers_other_in_tieset": 0,
+        "n_cells_swap_attempted": 0,
+        "n_cells_blocked_swap_base_budget": 0,
+        "n_cells_pass_base_budget": 0,
+        "n_cells_pass_all_gates_pre_conflict": 0,
+        "best_pair_delta_base_sum_min": None,
+        "best_pair_delta_base_sum_p10": None,
+        "best_pair_delta_base_sum_p50": None,
+        "swap_target_spots_per_cell_mean": None,
+        "swap_target_spots_per_cell_p50": None,
+        "partner_pool_size_mean": None,
+        "partner_pool_size_p50": None,
+        "partner_pool_size_min": None,
+        "partner_pool_ge_20_count": 0,
+        "partner_pool_ge_50_count": 0,
+        "n_cells_target_spot_empty_partner_pool": 0,
+        "n_swap_candidates_scanned_total": 0,
+        "n_cells_blocked_swap_delta_min": 0,
+        "n_actions_generated_total": 0,
+        "n_actions_after_base_budget": 0,
+        "n_actions_after_gainA": 0,
+        "selected_actions_gainA_sum": 0.0,
+        "selected_target_spot_unique_count": 0,
+        "svg_gain_a_best_p50": None,
+        "svg_gain_a_best_p90": None,
+        "svg_gain_b_best_p50": None,
+        "svg_gain_b_best_p90": None,
+        "svg_gain_sum_best_p50": None,
+        "svg_gain_sum_best_p90": None,
+        "max_moves_per_round": int(np.floor(max_move_frac * max(1, len(pool_orig_ids)))),
+        "capacity_violation": False,
+        "capacity_check": None,
+    }
+    if rounds <= 0:
+        meta["skip_reason"] = "rounds=0"
+        return assignments, _assignments_to_matrix(assignments, len(spot_ids), len(pool_orig_ids)).tocsr(), meta
+    if alpha <= 0:
+        meta["skip_reason"] = "alpha=0"
+        return assignments, _assignments_to_matrix(assignments, len(spot_ids), len(pool_orig_ids)).tocsr(), meta
+    if max_move_frac <= 0:
+        meta["skip_reason"] = "max_move_frac=0"
+        return assignments, _assignments_to_matrix(assignments, len(spot_ids), len(pool_orig_ids)).tocsr(), meta
+    if max_changed_cells is not None and int(max_changed_cells) <= 0:
+        meta["skip_reason"] = "max_changed_cells=0"
+        return assignments, _assignments_to_matrix(assignments, len(spot_ids), len(pool_orig_ids)).tocsr(), meta
+    if not plugin_genes:
+        meta["skip_reason"] = "empty_svg_genes"
+        return assignments, _assignments_to_matrix(assignments, len(spot_ids), len(pool_orig_ids)).tocsr(), meta
+
+    genes_set = set(genes_use)
+    missing_genes = sorted([g for g in plugin_genes if g not in genes_set])
+    if missing_genes:
+        raise ValueError(f"svg_post: plugin_genes missing in sc/st: {missing_genes[:5]}")
+
+    gene_to_idx = {g: i for i, g in enumerate(genes_use)}
+    svg_gene_idx = [gene_to_idx[g] for g in plugin_genes]
+    meta["n_svg_genes"] = int(len(svg_gene_idx))
+    if len(svg_gene_idx) == 0:
+        meta["skip_reason"] = "svg_genes_empty_after_align"
+        return assignments, _assignments_to_matrix(assignments, len(spot_ids), len(pool_orig_ids)).tocsr(), meta
+
+    weights = w_full[np.array(svg_gene_idx, dtype=int)]
+    weights = np.minimum(weights, float(weight_clip_max))
+
+    sc_svg = sc_cost.loc[pool_orig_ids, plugin_genes].to_numpy(dtype=float, copy=False)
+    st_svg = st_cost.loc[spot_ids, plugin_genes].to_numpy(dtype=float, copy=False)
+    sc_svg = sc_svg * weights
+    st_svg = st_svg * weights
+    if spot_weight_matrix is not None:
+        if spot_weight_matrix.shape[1] != len(genes_use):
+            raise ValueError("svg_post: spot_weight_matrix gene dimension mismatch")
+        st_svg = st_svg * spot_weight_matrix[:, svg_gene_idx]
+
+    if not np.isfinite(sc_svg).all():
+        raise ValueError("svg_post: non-finite values in sc_svg")
+    if not np.isfinite(st_svg).all():
+        raise ValueError("svg_post: non-finite values in st_svg")
+
+    dm = str(distance_metric or "Pearson_correlation")
+    if dm not in {"Pearson_correlation", "Spearman_correlation", "Euclidean"}:
+        raise ValueError(f"svg_post: unsupported distance_metric={dm!r}")
+    meta["base_distance_metric"] = dm
+    base_margin_tau = float(base_margin_tau or 0.0)
+    swap_delta_min = float(swap_delta_min or 0.0)
+    require_delta_base_nonpositive = bool(require_delta_base_nonpositive)
+    swap_require_delta_base_nonpositive = bool(swap_require_delta_base_nonpositive)
+    swap_depth = int(swap_depth or 1)
+    if swap_depth != 1:
+        raise ValueError("svg_post: swap_depth>1 not supported")
+    swap_only_within_tieset = bool(swap_only_within_tieset)
+    max_swaps_per_round = int(max_swaps_per_round) if max_swaps_per_round is not None else None
+    swap_base_mode = str(swap_base_mode or "both_nonpositive").strip().lower()
+    if swap_base_mode not in {"both_nonpositive", "pair_budget"}:
+        raise ValueError(f"svg_post: invalid swap_base_mode={swap_base_mode!r}")
+    base_pair_budget_eps = float(base_pair_budget_eps or 0.0)
+    if max_changed_cells is not None:
+        max_changed_cells = int(max_changed_cells)
+    selection_mode = str(selection_mode or "sequential_greedy").strip().lower()
+    if selection_mode not in {"sequential_greedy", "global_pool_greedy"}:
+        raise ValueError(f"svg_post: invalid selection_mode={selection_mode!r}")
+    if action_topm is not None:
+        action_topm = int(action_topm)
+    sort_key = str(sort_key or "gainA_penalized").strip()
+    sort_key_norm = sort_key.strip().lower()
+    if sort_key_norm in ("gainsum", "gain_sum"):
+        sort_key = "gainSum"
+    elif sort_key_norm in ("gaina", "gain_a"):
+        sort_key = "gainA"
+    elif sort_key_norm in ("gaina_penalized", "gainA_penalized".lower()):
+        sort_key = "gainA_penalized"
+    else:
+        raise ValueError(f"svg_post: invalid sort_key={sort_key!r}")
+    lambda_partner_hurt = float(lambda_partner_hurt or 0.0)
+    lambda_base = float(lambda_base or 0.0)
+    lambda_type_shift = float(lambda_type_shift or 0.0)
+    if lambda_partner_hurt < 0 or lambda_base < 0 or lambda_type_shift < 0:
+        raise ValueError("svg_post: lambda_* must be >= 0")
+    swap_scope = str(swap_scope or "a_and_b_tieset").strip().lower()
+    if swap_scope not in {"a_tieset_only", "a_and_b_tieset"}:
+        raise ValueError(f"svg_post: invalid swap_scope={swap_scope!r}")
+    if swap_partner_topm is not None:
+        swap_partner_topm = int(swap_partner_topm)
+    if swap_target_topk is not None:
+        swap_target_topk = int(swap_target_topk)
+    swap_target_expand_mode = str(swap_target_expand_mode or "none").strip().lower()
+    if swap_target_expand_mode in ("", "none"):
+        swap_target_expand_mode = "none"
+    if swap_target_expand_mode not in {"none", "neighbor_knn"}:
+        raise ValueError(f"svg_post: invalid swap_target_expand_mode={swap_target_expand_mode!r}")
+    swap_target_expand_k = int(swap_target_expand_k or 0)
+    if uncertain_margin_tau is not None:
+        uncertain_margin_tau = float(uncertain_margin_tau)
+    meta["base_margin_tau"] = float(base_margin_tau)
+    meta["uncertain_margin_tau"] = float(uncertain_margin_tau) if uncertain_margin_tau is not None else None
+    meta["swap_delta_min"] = float(swap_delta_min)
+    meta["require_delta_base_nonpositive"] = bool(require_delta_base_nonpositive)
+    meta["swap_require_delta_base_nonpositive"] = bool(swap_require_delta_base_nonpositive)
+
+    sc_base = sc_cost.loc[pool_orig_ids, genes_use].to_numpy(dtype=float, copy=False)
+    st_base = st_cost.loc[spot_ids, genes_use].to_numpy(dtype=float, copy=False)
+    sc_base = sc_base * w_full
+    st_base = st_base * w_full
+    if spot_weight_matrix is not None:
+        if spot_weight_matrix.shape[1] != len(genes_use):
+            raise ValueError("svg_post: spot_weight_matrix gene dimension mismatch")
+        st_base = st_base * spot_weight_matrix
+
+    if not np.isfinite(sc_base).all():
+        raise ValueError("svg_post: non-finite values in sc_base")
+    if not np.isfinite(st_base).all():
+        raise ValueError("svg_post: non-finite values in st_base")
+
+    if dm == "Spearman_correlation":
+        sc_base_use = np.apply_along_axis(rankdata, 1, sc_base)
+        st_base_use = np.apply_along_axis(rankdata, 1, st_base)
+        base_metric = "correlation"
+    elif dm == "Pearson_correlation":
+        sc_base_use = sc_base
+        st_base_use = st_base
+        base_metric = "correlation"
+    else:
+        sc_base_use = sc_base
+        st_base_use = st_base
+        base_metric = "euclidean"
+
+    n_cells = len(pool_orig_ids)
+    n_spots = len(spot_ids)
+    if n_cells == 0 or n_spots == 0:
+        meta["skip_reason"] = "empty_cells_or_spots"
+        return assignments, _assignments_to_matrix(assignments, n_spots, n_cells).tocsr(), meta
+    if len(cell_types) != n_cells:
+        raise ValueError(f"svg_post: cell_types length {len(cell_types)} != n_cells {n_cells}")
+
+    current_spot = np.full(n_cells, -1, dtype=int)
+    for cell_idx, spot_idx, _ in assignments:
+        current_spot[cell_idx] = int(spot_idx)
+    if (current_spot < 0).any():
+        raise ValueError("svg_post: missing assignments for some cells")
+
+    spot_neighbors = _build_spot_neighbor_sets(st_coords, neighbor_k)
+    if len(spot_neighbors) != n_spots:
+        raise ValueError("svg_post: neighbor list size mismatch")
+
+    cells_by_spot: List[List[int]] = [[] for _ in range(n_spots)]
+    for c, s in enumerate(current_spot):
+        cells_by_spot[int(s)].append(c)
+    occupancy = np.array([len(x) for x in cells_by_spot], dtype=int)
+    cap = np.asarray(capacity, dtype=int)
+    if cap.shape[0] != n_spots:
+        raise ValueError("svg_post: capacity length mismatch")
+
+    n_genes_svg = sc_svg.shape[1]
+
+    def _score_cell_spots_svg(cell_idx: int, spots: List[int]) -> np.ndarray:
+        vec = sc_svg[cell_idx]
+        diffs = np.abs(st_svg[np.array(spots, dtype=int)] - vec)
+        return diffs.mean(axis=1) if n_genes_svg > 0 else np.full(len(spots), 0.0)
+
+    def _score_cell_spots_base(cell_idx: int, spots: List[int]) -> np.ndarray:
+        vec = sc_base_use[cell_idx][None, :]
+        cand = st_base_use[np.array(spots, dtype=int)]
+        if base_metric == "correlation":
+            scores = cdist(vec, cand, metric="correlation")[0]
+        else:
+            scores = cdist(vec, cand, metric="euclidean")[0]
+        if not np.isfinite(scores).all():
+            raise ValueError("svg_post: non-finite values in base_cost")
+        return scores
+
+    moves_total = 0
+    swaps_total = 0
+    moves_per_round: List[int] = []
+    n_candidates_total = 0
+    n_proposals_total = 0
+    skipped_base_margin = 0
+    skipped_uncertain = 0
+    skipped_base_delta = 0
+    moves_due_svg = 0
+    eligible_tiebreak = np.zeros(n_cells, dtype=bool)
+    blocked_delta_base = np.zeros(n_cells, dtype=bool)
+    tieset_size_ge2 = np.zeros(n_cells, dtype=bool)
+    has_target_free_capacity = np.zeros(n_cells, dtype=bool)
+    blocked_capacity = np.zeros(n_cells, dtype=bool)
+    blocked_swap_no_partner = np.zeros(n_cells, dtype=bool)
+    blocked_swap_no_candidate = np.zeros(n_cells, dtype=bool)
+    blocked_swap_svg_gain = np.zeros(n_cells, dtype=bool)
+    blocked_swap_conflict = np.zeros(n_cells, dtype=bool)
+    pass_base_budget = np.zeros(n_cells, dtype=bool)
+    pass_all_gates_pre_conflict = np.zeros(n_cells, dtype=bool)
+    svg_prefers_other = np.zeros(n_cells, dtype=bool)
+    swap_attempted = np.zeros(n_cells, dtype=bool)
+    blocked_swap_base_budget = np.zeros(n_cells, dtype=bool)
+    best_pair_delta_base_sum_min = None
+    best_pair_delta_base_sum_cells: List[float] = []
+    swap_gain_a_best_cells: List[float] = []
+    swap_gain_b_best_cells: List[float] = []
+    swap_gain_sum_best_cells: List[float] = []
+    type_penalty_candidate_total = 0
+    type_penalty_candidate_nonzero = 0
+    type_penalty_selected_total = 0
+    type_penalty_selected_nonzero = 0
+    actions_generated_total = 0
+    actions_after_base_budget = 0
+    actions_after_gainA = 0
+    selected_actions_gain_sum = 0.0
+    selected_target_spots: set[int] = set()
+    selected_actions: List[Dict[str, Any]] = []
+    target_spot_empty_partner_pool = np.zeros(n_cells, dtype=bool)
+    blocked_swap_delta_min = np.zeros(n_cells, dtype=bool)
+    n_swap_candidates_scanned_total = 0
+    swap_target_counts: List[int] = []
+    swap_target_set_sizes: List[int] = []
+    swap_target_after_topk_sizes: List[int] = []
+    partner_pool_sizes: List[int] = []
+    partner_pool_ge_20 = 0
+    partner_pool_ge_50 = 0
+
+    def _scaled_tau(tau: float, best: float) -> float:
+        return float(tau) * max(1.0, abs(float(best)))
+
+    def _record_action(
+        *,
+        action_type: str,
+        c: int,
+        s: int,
+        t: int,
+        gain_a: float,
+        gain_b: float,
+        gain_sum: float,
+        partner_hurt: float,
+        type_shift_penalty: float,
+        base_pair_sum: float,
+        c2: Optional[int] = None,
+    ) -> None:
+        nonlocal type_penalty_selected_total, type_penalty_selected_nonzero
+        cell_type = str(cell_types[c])
+        partner_cell_type = str(cell_types[c2]) if c2 is not None else None
+        row = {
+            "action_type": str(action_type),
+            "cell_id": str(pool_orig_ids[c]),
+            "cell_idx": int(c),
+            "cell_type": cell_type,
+            "from_spot": str(spot_ids[s]),
+            "to_spot": str(spot_ids[t]),
+            "spot_from_idx": int(s),
+            "spot_to_idx": int(t),
+            "gainA": float(gain_a),
+            "gainB": float(gain_b),
+            "gainSum": float(gain_sum),
+            "partner_hurt": float(partner_hurt),
+            "type_shift_penalty": float(type_shift_penalty),
+            "base_pair_sum": float(base_pair_sum),
+            "partner_cell_id": str(pool_orig_ids[c2]) if c2 is not None else None,
+            "partner_cell_idx": int(c2) if c2 is not None else None,
+            "partner_cell_type": partner_cell_type,
+        }
+        if action_type == "swap":
+            type_penalty_selected_total += 1
+            if type_shift_penalty > 0:
+                type_penalty_selected_nonzero += 1
+        selected_actions.append(row)
+
+    base_spot = current_spot.copy()
+    for r in range(int(rounds)):
+        proposals: List[Tuple[float, int, int, int, float, float, float, float, bool, List[int]]] = []
+        swaps_round = 0
+        for c in range(n_cells):
+            s = int(current_spot[c])
+            cand = [s] + spot_neighbors[s]
+            if len(cand) == 1:
+                continue
+            base_scores = _score_cell_spots_base(c, cand)
+            n_candidates_total += len(cand)
+            best_idx = int(np.argmin(base_scores))
+            best_base = float(base_scores[best_idx])
+            base_margin = _scaled_tau(base_margin_tau, best_base)
+            candidate_idx = np.where(base_scores <= best_base + base_margin)[0]
+            if 0 not in candidate_idx:
+                skipped_base_margin += 1
+                continue
+            eligible_tiebreak[c] = True
+            if len(candidate_idx) >= 2:
+                tieset_size_ge2[c] = True
+                tie_spots = [cand[i] for i in candidate_idx]
+                for spot in tie_spots:
+                    if spot != s and occupancy[spot] < cap[spot]:
+                        has_target_free_capacity[c] = True
+                        break
+            if len(candidate_idx) <= 1:
+                continue
+            tie_idx = [int(i) for i in candidate_idx if int(i) != 0]
+            cand_sel = [cand[i] for i in candidate_idx]
+            svg_scores = _score_cell_spots_svg(c, cand_sel)
+            current_rel_idx = int(np.where(candidate_idx == 0)[0][0])
+            score_current_svg = float(svg_scores[current_rel_idx])
+            best_svg_rel_idx = int(np.argmin(svg_scores))
+            best_spot = int(cand_sel[best_svg_rel_idx])
+            if best_spot != s:
+                svg_prefers_other[c] = True
+            if uncertain_margin_tau is not None:
+                if len(base_scores) < 2:
+                    skipped_uncertain += 1
+                    continue
+                base_sorted = np.partition(base_scores, 1)
+                margin = float(base_sorted[1] - base_sorted[0])
+                if margin > _scaled_tau(uncertain_margin_tau, best_base):
+                    skipped_uncertain += 1
+                    continue
+            if best_spot == s:
+                continue
+            score_target_svg = float(svg_scores[best_svg_rel_idx])
+            gain = float((score_current_svg - score_target_svg) * alpha)
+            if gain <= delta_min:
+                continue
+            base_current = float(base_scores[0])
+            base_target = float(base_scores[candidate_idx[best_svg_rel_idx]])
+            delta_base = base_target - base_current
+            if require_delta_base_nonpositive and delta_base > 0:
+                skipped_base_delta += 1
+                blocked_delta_base[c] = True
+                continue
+            base_best_spot = int(cand[best_idx])
+            due_svg = best_spot != base_best_spot
+            expand_idx: List[int] = []
+            if swap_target_expand_mode == "neighbor_knn" and swap_target_expand_k > 0:
+                if len(cand) > 1:
+                    neighbor_idx = np.argsort(base_scores[1:])[:swap_target_expand_k] + 1
+                    expand_idx = [int(i) for i in neighbor_idx if int(i) != 0]
+            target_idx = sorted(set(tie_idx) | set(expand_idx))
+            swap_target_set_sizes.append(len(target_idx))
+            if target_idx:
+                target_spots = [cand[i] for i in target_idx]
+                target_scores = _score_cell_spots_svg(c, target_spots)
+                svg_pairs = [(int(spot), float(score)) for spot, score in zip(target_spots, target_scores)]
+                svg_pairs.sort(key=lambda x: x[1])
+                if swap_target_topk is not None and swap_target_topk > 0:
+                    svg_pairs = svg_pairs[:swap_target_topk]
+                swap_targets = [spot for spot, _ in svg_pairs]
+            else:
+                swap_targets = []
+            swap_target_after_topk_sizes.append(len(swap_targets))
+            proposals.append((gain, c, s, best_spot, score_current_svg, score_target_svg, base_current, base_target, due_svg, swap_targets))
+
+        if not proposals:
+            break
+
+        proposals.sort(key=lambda x: x[0], reverse=True)
+        n_proposals_total += len(proposals)
+        max_moves = int(np.floor(max_move_frac * n_cells))
+        if max_changed_cells is not None:
+            remaining_allowed = max_changed_cells - moves_total
+            if remaining_allowed <= 0:
+                break
+            if max_moves <= 0:
+                break
+            if max_moves > remaining_allowed:
+                max_moves = remaining_allowed
+        if max_moves <= 0:
+            break
+
+        moves_round = 0
+        if selection_mode == "global_pool_greedy":
+            actions_by_cell: Dict[int, List[Tuple[str, float, float, float, float, float, float, int, int, int, Optional[int], bool]]] = {}
+            for gain, c, s, t, score_s, score_t, base_s, base_t, due_svg, swap_targets in proposals:
+                if int(current_spot[c]) != s:
+                    continue
+                if occupancy[t] < cap[t]:
+                    base_delta = float(base_t - base_s)
+                    gain_a = float(gain)
+                    gain_b = 0.0
+                    gain_sum = gain_a
+                    type_penalty = 0.0
+                    if sort_key == "gainSum":
+                        select_score = gain_sum
+                    elif sort_key == "gainA":
+                        select_score = gain_a
+                    else:
+                        select_score = gain_a - (lambda_base * base_delta)
+                    actions_by_cell.setdefault(c, []).append(
+                        ("move", select_score, gain_a, gain_b, gain_sum, base_delta, type_penalty, c, s, t, None, due_svg)
+                    )
+                    continue
+                if not allow_swap:
+                    blocked_capacity[c] = True
+                    continue
+                swap_attempted[c] = True
+                best_swap_gain = None
+                best_swap_gain_b = None
+                best_swap_gain_sum = None
+                best_swap_gain_any = None
+                best_swap_gain_any_b = None
+                best_swap_gain_any_sum = None
+                best_swap_base_sum = None
+                best_c2 = None
+                best_target = None
+                pass_base_budget_cell = False
+                base_budget_rejected = 0
+                candidate_scanned = 0
+                best_pair_delta_base_sum_cell = None
+                swap_target_counts.append(len(swap_targets))
+                any_target_pool = False
+                for target in swap_targets:
+                    partner_pool = [c2 for c2 in cells_by_spot[target] if c2 != c]
+                    if swap_partner_topm is not None and swap_partner_topm > 0 and len(partner_pool) > swap_partner_topm:
+                        scored = []
+                        for c2 in partner_pool:
+                            base_c2_t = float(_score_cell_spots_base(c2, [target])[0])
+                            scored.append((base_c2_t, c2))
+                        scored.sort(reverse=True)
+                        partner_pool = [c2 for _, c2 in scored[:swap_partner_topm]]
+                    pool_size = len(partner_pool)
+                    partner_pool_sizes.append(pool_size)
+                    if pool_size >= 20:
+                        partner_pool_ge_20 += 1
+                    if pool_size >= 50:
+                        partner_pool_ge_50 += 1
+                    if pool_size == 0:
+                        continue
+                    any_target_pool = True
+                    for c2 in partner_pool:
+                        if c2 == c:
+                            continue
+                        if swap_scope == "a_and_b_tieset":
+                            cand2 = [target] + spot_neighbors[target]
+                            if s not in cand2:
+                                continue
+                            base_scores2 = _score_cell_spots_base(c2, cand2)
+                            best_base2 = float(np.min(base_scores2))
+                            margin2 = _scaled_tau(base_margin_tau, best_base2)
+                            tie_idx2 = np.where(base_scores2 <= best_base2 + margin2)[0]
+                            if 0 not in tie_idx2:
+                                continue
+                            idx_s2 = cand2.index(s)
+                            if idx_s2 not in tie_idx2:
+                                continue
+                        candidate_scanned += 1
+                        n_swap_candidates_scanned_total += 1
+                        type_penalty_candidate_total += 1
+                        if cell_types[c] != cell_types[c2]:
+                            type_penalty_candidate_nonzero += 1
+                        score_c_t = float(_score_cell_spots_svg(c, [target])[0])
+                        score_c2_t = float(_score_cell_spots_svg(c2, [target])[0])
+                        score_c2_s = float(_score_cell_spots_svg(c2, [s])[0])
+                        base_c2 = _score_cell_spots_base(c2, [target, s])
+                        base_c_t = float(_score_cell_spots_base(c, [target])[0])
+                        delta_base_c = base_c_t - base_s
+                        delta_base_c2 = float(base_c2[1] - base_c2[0])
+                        delta_base_sum = float(delta_base_c + delta_base_c2)
+                        if best_pair_delta_base_sum_min is None or delta_base_sum < best_pair_delta_base_sum_min:
+                            best_pair_delta_base_sum_min = delta_base_sum
+                        if swap_base_mode == "both_nonpositive":
+                            if delta_base_c > 0 or delta_base_c2 > 0:
+                                base_budget_rejected += 1
+                                continue
+                        elif swap_base_mode == "pair_budget":
+                            if delta_base_c > 0:
+                                base_budget_rejected += 1
+                                continue
+                            if delta_base_sum > base_pair_budget_eps:
+                                base_budget_rejected += 1
+                                continue
+                        pass_base_budget_cell = True
+                        gain_a = float((score_s - score_c_t) * alpha)
+                        gain_b = float((score_c2_t - score_c2_s) * alpha)
+                        gain_sum = float(gain_a + gain_b)
+                        if best_swap_gain_any is None or gain_a > best_swap_gain_any:
+                            best_swap_gain_any = gain_a
+                            best_swap_gain_any_b = gain_b
+                            best_swap_gain_any_sum = gain_sum
+                        if gain_a <= 0:
+                            continue
+                        if best_pair_delta_base_sum_cell is None or delta_base_sum < best_pair_delta_base_sum_cell:
+                            best_pair_delta_base_sum_cell = delta_base_sum
+                        if best_swap_gain is None or gain_a > best_swap_gain:
+                            best_swap_gain = gain_a
+                            best_swap_gain_b = gain_b
+                            best_swap_gain_sum = gain_sum
+                            best_c2 = c2
+                            best_target = target
+                            best_swap_base_sum = delta_base_sum
+                if not any_target_pool:
+                    target_spot_empty_partner_pool[c] = True
+                if candidate_scanned > 0 and best_pair_delta_base_sum_cell is not None:
+                    best_pair_delta_base_sum_cells.append(float(best_pair_delta_base_sum_cell))
+                if candidate_scanned > 0 and best_swap_gain_any is not None:
+                    swap_gain_a_best_cells.append(float(best_swap_gain_any))
+                    swap_gain_b_best_cells.append(float(best_swap_gain_any_b or 0.0))
+                    swap_gain_sum_best_cells.append(float(best_swap_gain_any_sum or 0.0))
+                if candidate_scanned == 0:
+                    blocked_swap_no_candidate[c] = True
+                    blocked_swap_no_partner[c] = True
+                elif not pass_base_budget_cell:
+                    blocked_swap_base_budget[c] = True
+                elif best_swap_gain_any is None or best_swap_gain_any <= 0:
+                    blocked_swap_svg_gain[c] = True
+                elif best_swap_gain is None or best_swap_gain <= swap_delta_min:
+                    blocked_swap_delta_min[c] = True
+                else:
+                    pass_base_budget[c] = True
+                    pass_all_gates_pre_conflict[c] = True
+                    gain_a = float(best_swap_gain or 0.0)
+                    gain_b = float(best_swap_gain_b or 0.0)
+                    gain_sum = float(best_swap_gain_sum or (gain_a + gain_b))
+                    base_delta_sum = float(best_swap_base_sum or 0.0)
+                    partner_hurt = max(0.0, -gain_b)
+                    type_penalty = 1.0 if cell_types[c] != cell_types[int(best_c2)] else 0.0
+                    if sort_key == "gainSum":
+                        select_score = gain_sum
+                    elif sort_key == "gainA":
+                        select_score = gain_a
+                    else:
+                        select_score = (
+                            gain_a
+                            - (lambda_partner_hurt * partner_hurt)
+                            - (lambda_base * base_delta_sum)
+                            - (lambda_type_shift * type_penalty)
+                        )
+                    actions_by_cell.setdefault(c, []).append(
+                        ("swap", select_score, gain_a, gain_b, gain_sum, base_delta_sum, type_penalty, c, s, int(best_target), int(best_c2), due_svg)
+                    )
+            action_pool: List[Tuple[str, float, float, float, float, float, float, int, int, int, Optional[int], bool]] = []
+            for c, acts in actions_by_cell.items():
+                acts.sort(key=lambda x: x[1], reverse=True)
+                if action_topm is not None and action_topm > 0:
+                    acts = acts[:action_topm]
+                action_pool.extend(acts)
+            actions_generated_total += len(action_pool)
+            actions_after_base_budget += len(action_pool)
+            actions_after_gainA += len(action_pool)
+            action_pool.sort(key=lambda x: (-x[1], x[5]))
+            used_cells: set[int] = set()
+            for action_type, select_score, gain_a, gain_b, gain_sum, base_delta_sum, type_penalty, c, s, t, c2, due_svg in action_pool:
+                if moves_round >= max_moves:
+                    break
+                if c in used_cells:
+                    if action_type == "swap":
+                        blocked_swap_conflict[c] = True
+                    continue
+                if action_type == "swap" and c2 is not None and c2 in used_cells:
+                    blocked_swap_conflict[c] = True
+                    continue
+                if action_type == "move":
+                    if int(current_spot[c]) != s:
+                        continue
+                    if occupancy[t] >= cap[t]:
+                        blocked_capacity[c] = True
+                        continue
+                    current_spot[c] = t
+                    occupancy[s] -= 1
+                    occupancy[t] += 1
+                    cells_by_spot[s].remove(c)
+                    cells_by_spot[t].append(c)
+                    moves_round += 1
+                    moves_total += 1
+                    used_cells.add(c)
+                    selected_target_spots.add(t)
+                    selected_actions_gain_sum += float(gain_a)
+                    _record_action(
+                        action_type="move",
+                        c=c,
+                        s=s,
+                        t=t,
+                        gain_a=float(gain_a),
+                        gain_b=0.0,
+                        gain_sum=float(gain_a),
+                        partner_hurt=0.0,
+                        type_shift_penalty=float(type_penalty),
+                        base_pair_sum=float(base_delta_sum),
+                        c2=None,
+                    )
+                    if due_svg:
+                        moves_due_svg += 1
+                else:
+                    if max_swaps_per_round is not None and swaps_round >= max_swaps_per_round:
+                        blocked_swap_conflict[c] = True
+                        continue
+                    if c2 is None:
+                        blocked_swap_conflict[c] = True
+                        continue
+                    if int(current_spot[c]) != s or int(current_spot[c2]) != t:
+                        blocked_swap_conflict[c] = True
+                        continue
+                    if moves_round + 2 > max_moves:
+                        blocked_swap_conflict[c] = True
+                        continue
+                    current_spot[c] = t
+                    current_spot[c2] = s
+                    cells_by_spot[s].remove(c)
+                    cells_by_spot[t].append(c)
+                    cells_by_spot[t].remove(c2)
+                    cells_by_spot[s].append(c2)
+                    moves_round += 2
+                    moves_total += 2
+                    swaps_total += 1
+                    swaps_round += 1
+                    used_cells.add(c)
+                    used_cells.add(c2)
+                    selected_target_spots.add(t)
+                    selected_actions_gain_sum += float(gain_a)
+                    _record_action(
+                        action_type="swap",
+                        c=c,
+                        s=s,
+                        t=t,
+                        gain_a=float(gain_a),
+                        gain_b=float(gain_b),
+                        gain_sum=float(gain_sum),
+                        partner_hurt=float(max(0.0, -gain_b)),
+                        type_shift_penalty=float(type_penalty),
+                        base_pair_sum=float(base_delta_sum),
+                        c2=int(c2),
+                    )
+                    if due_svg:
+                        moves_due_svg += 1
+        else:
+            for gain, c, s, t, score_s, score_t, base_s, base_t, due_svg, swap_targets in proposals:
+                if moves_round >= max_moves:
+                    break
+                if int(current_spot[c]) != s:
+                    continue
+                if occupancy[t] < cap[t]:
+                    current_spot[c] = t
+                    occupancy[s] -= 1
+                    occupancy[t] += 1
+                    cells_by_spot[s].remove(c)
+                    cells_by_spot[t].append(c)
+                    moves_round += 1
+                    moves_total += 1
+                    selected_target_spots.add(t)
+                    selected_actions_gain_sum += float(gain)
+                    _record_action(
+                        action_type="move",
+                        c=c,
+                        s=s,
+                        t=t,
+                        gain_a=float(gain),
+                        gain_b=0.0,
+                        gain_sum=float(gain),
+                        partner_hurt=0.0,
+                        type_shift_penalty=0.0,
+                        base_pair_sum=float(base_t - base_s),
+                        c2=None,
+                    )
+                    if due_svg:
+                        moves_due_svg += 1
+                    continue
+                if not allow_swap:
+                    blocked_capacity[c] = True
+                    continue
+                if moves_round + 2 > max_moves:
+                    blocked_swap_conflict[c] = True
+                    continue
+                if max_swaps_per_round is not None and swaps_round >= max_swaps_per_round:
+                    continue
+                swap_attempted[c] = True
+                best_swap_gain = None
+                best_swap_gain_b = None
+                best_swap_gain_sum = None
+                best_swap_gain_any = None
+                best_swap_gain_any_b = None
+                best_swap_gain_any_sum = None
+                best_swap_base_sum = None
+                best_c2 = None
+                best_target = None
+                pass_base_budget_cell = False
+                base_budget_rejected = 0
+                candidate_scanned = 0
+                swap_executed = False
+                best_pair_delta_base_sum_cell = None
+                swap_target_counts.append(len(swap_targets))
+                any_target_pool = False
+                for target in swap_targets:
+                    partner_pool = [c2 for c2 in cells_by_spot[target] if c2 != c]
+                    if swap_partner_topm is not None and swap_partner_topm > 0 and len(partner_pool) > swap_partner_topm:
+                        scored = []
+                        for c2 in partner_pool:
+                            base_c2_t = float(_score_cell_spots_base(c2, [target])[0])
+                            scored.append((base_c2_t, c2))
+                        scored.sort(reverse=True)
+                        partner_pool = [c2 for _, c2 in scored[:swap_partner_topm]]
+                    pool_size = len(partner_pool)
+                    partner_pool_sizes.append(pool_size)
+                    if pool_size >= 20:
+                        partner_pool_ge_20 += 1
+                    if pool_size >= 50:
+                        partner_pool_ge_50 += 1
+                    if pool_size == 0:
+                        continue
+                    any_target_pool = True
+                    for c2 in partner_pool:
+                        if c2 == c:
+                            continue
+                        if swap_scope == "a_and_b_tieset":
+                            cand2 = [target] + spot_neighbors[target]
+                            if s not in cand2:
+                                continue
+                            base_scores2 = _score_cell_spots_base(c2, cand2)
+                            best_base2 = float(np.min(base_scores2))
+                            margin2 = _scaled_tau(base_margin_tau, best_base2)
+                            tie_idx2 = np.where(base_scores2 <= best_base2 + margin2)[0]
+                            if 0 not in tie_idx2:
+                                continue
+                            idx_s2 = cand2.index(s)
+                            if idx_s2 not in tie_idx2:
+                                continue
+                        candidate_scanned += 1
+                        n_swap_candidates_scanned_total += 1
+                        type_penalty_candidate_total += 1
+                        if cell_types[c] != cell_types[c2]:
+                            type_penalty_candidate_nonzero += 1
+                        score_c_t = float(_score_cell_spots_svg(c, [target])[0])
+                        score_c2_t = float(_score_cell_spots_svg(c2, [target])[0])
+                        score_c2_s = float(_score_cell_spots_svg(c2, [s])[0])
+                        base_c2 = _score_cell_spots_base(c2, [target, s])
+                        base_c_t = float(_score_cell_spots_base(c, [target])[0])
+                        delta_base_c = base_c_t - base_s
+                        delta_base_c2 = float(base_c2[1] - base_c2[0])
+                        delta_base_sum = float(delta_base_c + delta_base_c2)
+                        if best_pair_delta_base_sum_min is None or delta_base_sum < best_pair_delta_base_sum_min:
+                            best_pair_delta_base_sum_min = delta_base_sum
+                        if swap_base_mode == "both_nonpositive":
+                            if delta_base_c > 0 or delta_base_c2 > 0:
+                                base_budget_rejected += 1
+                                continue
+                        elif swap_base_mode == "pair_budget":
+                            if delta_base_c > 0:
+                                base_budget_rejected += 1
+                                continue
+                            if delta_base_sum > base_pair_budget_eps:
+                                base_budget_rejected += 1
+                                continue
+                        pass_base_budget_cell = True
+                        gain_a = float((score_s - score_c_t) * alpha)
+                        gain_b = float((score_c2_t - score_c2_s) * alpha)
+                        gain_sum = float(gain_a + gain_b)
+                        if best_swap_gain_any is None or gain_a > best_swap_gain_any:
+                            best_swap_gain_any = gain_a
+                            best_swap_gain_any_b = gain_b
+                            best_swap_gain_any_sum = gain_sum
+                        if gain_a <= 0:
+                            continue
+                        if best_pair_delta_base_sum_cell is None or delta_base_sum < best_pair_delta_base_sum_cell:
+                            best_pair_delta_base_sum_cell = delta_base_sum
+                        if best_swap_gain is None or gain_a > best_swap_gain:
+                            best_swap_gain = gain_a
+                            best_swap_gain_b = gain_b
+                            best_swap_gain_sum = gain_sum
+                            best_c2 = c2
+                            best_target = target
+                            best_swap_base_sum = delta_base_sum
+                if not any_target_pool:
+                    target_spot_empty_partner_pool[c] = True
+                if candidate_scanned > 0 and best_pair_delta_base_sum_cell is not None:
+                    best_pair_delta_base_sum_cells.append(float(best_pair_delta_base_sum_cell))
+                if candidate_scanned > 0 and best_swap_gain_any is not None:
+                    swap_gain_a_best_cells.append(float(best_swap_gain_any))
+                    swap_gain_b_best_cells.append(float(best_swap_gain_any_b or 0.0))
+                    swap_gain_sum_best_cells.append(float(best_swap_gain_any_sum or 0.0))
+                if candidate_scanned == 0:
+                    blocked_swap_no_candidate[c] = True
+                    blocked_swap_no_partner[c] = True
+                elif not pass_base_budget_cell:
+                    blocked_swap_base_budget[c] = True
+                elif best_swap_gain_any is None or best_swap_gain_any <= 0:
+                    blocked_swap_svg_gain[c] = True
+                elif best_swap_gain is None or best_swap_gain <= swap_delta_min:
+                    blocked_swap_delta_min[c] = True
+                else:
+                    pass_base_budget[c] = True
+                    pass_all_gates_pre_conflict[c] = True
+                    if max_swaps_per_round is not None and swaps_round >= max_swaps_per_round:
+                        blocked_swap_conflict[c] = True
+                    elif best_c2 is None or best_target is None:
+                        blocked_swap_conflict[c] = True
+                    else:
+                        current_spot[c] = best_target
+                        current_spot[best_c2] = s
+                        cells_by_spot[s].remove(c)
+                        cells_by_spot[best_target].append(c)
+                        cells_by_spot[best_target].remove(best_c2)
+                        cells_by_spot[s].append(best_c2)
+                        moves_round += 2
+                        moves_total += 2
+                        swaps_total += 1
+                        swaps_round += 1
+                        swap_executed = True
+                        selected_target_spots.add(best_target)
+                        gain_a = float(best_swap_gain or 0.0)
+                        gain_b = float(best_swap_gain_b or 0.0)
+                        gain_sum = float(best_swap_gain_sum or (gain_a + gain_b))
+                        selected_actions_gain_sum += float(gain_a)
+                        _record_action(
+                            action_type="swap",
+                            c=c,
+                            s=s,
+                            t=int(best_target),
+                            gain_a=float(gain_a),
+                            gain_b=float(gain_b),
+                            gain_sum=float(gain_sum),
+                            partner_hurt=float(max(0.0, -gain_b)),
+                            type_shift_penalty=float(1.0 if cell_types[c] != cell_types[int(best_c2)] else 0.0),
+                            base_pair_sum=float(best_swap_base_sum or 0.0),
+                            c2=int(best_c2),
+                        )
+                        if due_svg:
+                            moves_due_svg += 1
+                if pass_base_budget_cell:
+                    pass_base_budget[c] = True
+                if candidate_scanned > 0 and base_budget_rejected == candidate_scanned:
+                    blocked_swap_base_budget[c] = True
+                if not swap_executed:
+                    blocked_capacity[c] = True
+
+        moves_per_round.append(moves_round)
+        meta["rounds_executed"] = r + 1
+        if moves_round == 0:
+            break
+        if (occupancy > cap).any():
+            current_spot = base_spot.copy()
+            meta["status"] = "capacity_violation_reverted"
+            meta["capacity_violation"] = True
+            break
+
+    counts = np.bincount(current_spot, minlength=n_spots)
+    cap_diff = counts - cap
+    meta["capacity_check"] = {
+        "max_overflow": int(np.max(cap_diff)) if len(cap_diff) else 0,
+        "max_underfill": int(np.max(-cap_diff)) if len(cap_diff) else 0,
+        "n_spots_overflow": int(np.sum(cap_diff > 0)),
+        "n_spots_underfill": int(np.sum(cap_diff < 0)),
+    }
+
+    assignments_out = [(int(c), int(s), 1.0) for c, s in enumerate(current_spot)]
+    hard_mat = _assignments_to_matrix(assignments_out, n_spots, n_cells).tocsr()
+
+    changed = int(np.sum(current_spot != base_spot))
+    if selection_mode == "sequential_greedy" and actions_generated_total == 0:
+        actions_generated_total = len(selected_actions)
+        actions_after_base_budget = len(selected_actions)
+        actions_after_gainA = len(selected_actions)
+    if selection_mode == "sequential_greedy" and meta["n_actions_generated_total"] == 0:
+        meta["n_actions_generated_total"] = int(len(selected_actions))
+    meta.update(
+        {
+            "status": "ok" if not meta["capacity_violation"] else meta["status"],
+            "n_candidates_total": int(n_candidates_total),
+            "n_proposals_total": int(n_proposals_total),
+            "n_moves_total": int(moves_total),
+            "n_swaps_total": int(swaps_total),
+            "moves_per_round": moves_per_round,
+            "n_cells_skipped_base_margin": int(skipped_base_margin),
+            "n_cells_skipped_uncertain_margin": int(skipped_uncertain),
+            "n_cells_skipped_base_delta": int(skipped_base_delta),
+            "n_cells_eligible_tiebreak": int(np.sum(eligible_tiebreak)),
+            "n_cells_blocked_delta_base": int(np.sum(blocked_delta_base)),
+            "n_moves_due_svg": int(moves_due_svg),
+            "n_cells_tieset_size_ge2": int(np.sum(tieset_size_ge2)),
+            "n_cells_has_target_with_free_capacity": int(np.sum(has_target_free_capacity)),
+            "n_cells_blocked_capacity": int(np.sum(blocked_capacity)),
+            "n_cells_blocked_swap_no_partner": int(np.sum(blocked_swap_no_partner)),
+            "n_cells_blocked_swap_no_candidate": int(np.sum(blocked_swap_no_candidate)),
+            "n_cells_blocked_swap_svg_gain": int(np.sum(blocked_swap_svg_gain)),
+            "n_cells_blocked_swap_conflict": int(np.sum(blocked_swap_conflict)),
+            "n_cells_svg_prefers_other_in_tieset": int(np.sum(svg_prefers_other)),
+            "n_cells_swap_attempted": int(np.sum(swap_attempted)),
+            "n_cells_blocked_swap_base_budget": int(np.sum(blocked_swap_base_budget)),
+            "n_cells_pass_base_budget": int(np.sum(pass_base_budget)),
+            "n_cells_pass_all_gates_pre_conflict": int(np.sum(pass_all_gates_pre_conflict)),
+            "best_pair_delta_base_sum_min": best_pair_delta_base_sum_min,
+            "n_cells_target_spot_empty_partner_pool": int(np.sum(target_spot_empty_partner_pool)),
+            "n_swap_candidates_scanned_total": int(n_swap_candidates_scanned_total),
+            "n_cells_blocked_swap_delta_min": int(np.sum(blocked_swap_delta_min)),
+            "n_actions_generated_total": int(actions_generated_total),
+            "n_actions_after_base_budget": int(actions_after_base_budget),
+            "n_actions_after_gainA": int(actions_after_gainA),
+            "selected_actions_gainA_sum": float(selected_actions_gain_sum),
+            "selected_target_spot_unique_count": int(len(selected_target_spots)),
+            "selected_actions": selected_actions,
+            "type_penalty_candidate_total": int(type_penalty_candidate_total),
+            "type_penalty_candidate_nonzero": int(type_penalty_candidate_nonzero),
+            "type_penalty_candidate_nonzero_rate": float(type_penalty_candidate_nonzero / type_penalty_candidate_total)
+            if type_penalty_candidate_total
+            else None,
+            "type_penalty_selected_total": int(type_penalty_selected_total),
+            "type_penalty_selected_nonzero": int(type_penalty_selected_nonzero),
+            "type_penalty_selected_nonzero_rate": float(type_penalty_selected_nonzero / type_penalty_selected_total)
+            if type_penalty_selected_total
+            else None,
+            "svg_gain_a_best_p50": float(np.percentile(swap_gain_a_best_cells, 50)) if swap_gain_a_best_cells else None,
+            "svg_gain_a_best_p90": float(np.percentile(swap_gain_a_best_cells, 90)) if swap_gain_a_best_cells else None,
+            "svg_gain_b_best_p50": float(np.percentile(swap_gain_b_best_cells, 50)) if swap_gain_b_best_cells else None,
+            "svg_gain_b_best_p90": float(np.percentile(swap_gain_b_best_cells, 90)) if swap_gain_b_best_cells else None,
+            "svg_gain_sum_best_p50": float(np.percentile(swap_gain_sum_best_cells, 50)) if swap_gain_sum_best_cells else None,
+            "svg_gain_sum_best_p90": float(np.percentile(swap_gain_sum_best_cells, 90)) if swap_gain_sum_best_cells else None,
+            "best_pair_delta_base_sum_p10": float(np.percentile(best_pair_delta_base_sum_cells, 10)) if best_pair_delta_base_sum_cells else None,
+            "best_pair_delta_base_sum_p50": float(np.percentile(best_pair_delta_base_sum_cells, 50)) if best_pair_delta_base_sum_cells else None,
+            "swap_target_spots_per_cell_mean": float(np.mean(swap_target_counts)) if swap_target_counts else None,
+            "swap_target_spots_per_cell_p50": float(np.percentile(swap_target_counts, 50)) if swap_target_counts else None,
+            "swap_target_set_size_mean": float(np.mean(swap_target_set_sizes)) if swap_target_set_sizes else None,
+            "swap_target_set_size_p50": float(np.percentile(swap_target_set_sizes, 50)) if swap_target_set_sizes else None,
+            "swap_target_set_size_after_topk_mean": float(np.mean(swap_target_after_topk_sizes)) if swap_target_after_topk_sizes else None,
+            "swap_target_set_size_after_topk_p50": float(np.percentile(swap_target_after_topk_sizes, 50)) if swap_target_after_topk_sizes else None,
+            "partner_pool_size_mean": float(np.mean(partner_pool_sizes)) if partner_pool_sizes else None,
+            "partner_pool_size_p50": float(np.percentile(partner_pool_sizes, 50)) if partner_pool_sizes else None,
+            "partner_pool_size_min": int(np.min(partner_pool_sizes)) if partner_pool_sizes else None,
+            "partner_pool_ge_20_count": int(partner_pool_ge_20),
+            "partner_pool_ge_50_count": int(partner_pool_ge_50),
+            "n_changed_cells": int(changed),
+            "changed_rate": float(changed / max(1, n_cells)),
+        }
+    )
+    return assignments_out, hard_mat, meta
+
+
+def _type_posterior_local_refine(
+    assignments: List[Tuple[int, int, float]],
+    *,
+    distance_metric: str,
+    sc_cost: pd.DataFrame,
+    st_cost: pd.DataFrame,
+    st_coords: pd.DataFrame,
+    sc_meta: Optional[pd.DataFrame],
+    sc_type_col: Optional[str],
+    pool_orig_ids: List[str],
+    cell_types: List[str],
+    spot_ids: List[str],
+    genes_use: List[str],
+    w_full: np.ndarray,
+    spot_weight_matrix: Optional[np.ndarray],
+    capacity: np.ndarray,
+    neighbor_k: int,
+    rounds: int,
+    max_changed_cells: Optional[int],
+    selection_mode: str,
+    action_topm: Optional[int],
+    delta_min: float,
+    base_margin_tau: Optional[float],
+    require_gainA_positive: bool,
+    swap_target_topk: Optional[int],
+    allow_swap: bool,
+    swap_scope: str,
+    swap_base_mode: str,
+    base_pair_budget_eps: float,
+    max_swaps_per_round: Optional[int],
+    partner_hurt_max: Optional[float],
+    max_high_hurt_actions: Optional[int],
+    high_hurt_threshold: Optional[float],
+    lambda_partner: float,
+    lambda_base: float,
+    mode: Optional[str] = None,
+    marker_source: Optional[str] = None,
+    marker_list: Optional[Any] = None,
+    markers_per_type: Optional[int] = None,
+    gene_weighting: Optional[str] = None,
+    type_order: Optional[List[str]] = None,
+) -> Tuple[List[Tuple[int, int, float]], csr_matrix, Dict[str, Any]]:
+    meta = {
+        "status": "skipped",
+        "skip_reason": None,
+        "mode": str(mode) if mode is not None else None,
+        "marker_source": str(marker_source) if marker_source is not None else None,
+        "markers_per_type": int(markers_per_type) if markers_per_type is not None else None,
+        "gene_weighting": str(gene_weighting) if gene_weighting is not None else None,
+        "require_gainA_positive": bool(require_gainA_positive),
+        "rounds_requested": int(rounds),
+        "rounds_executed": 0,
+        "neighbor_k": int(neighbor_k),
+        "max_changed_cells": int(max_changed_cells) if max_changed_cells is not None else None,
+        "selection_mode": str(selection_mode),
+        "action_topm": int(action_topm) if action_topm is not None else None,
+        "delta_min": float(delta_min),
+        "base_margin_tau": float(base_margin_tau) if base_margin_tau is not None else None,
+        "swap_target_topk": int(swap_target_topk) if swap_target_topk is not None else None,
+        "allow_swap": bool(allow_swap),
+        "swap_scope": str(swap_scope),
+        "swap_base_mode": str(swap_base_mode),
+        "base_pair_budget_eps": float(base_pair_budget_eps),
+        "max_swaps_per_round": int(max_swaps_per_round) if max_swaps_per_round is not None else None,
+        "partner_hurt_max": float(partner_hurt_max) if partner_hurt_max is not None else None,
+        "max_high_hurt_actions": int(max_high_hurt_actions) if max_high_hurt_actions is not None else None,
+        "high_hurt_threshold": float(high_hurt_threshold) if high_hurt_threshold is not None else None,
+        "lambda_partner": float(lambda_partner),
+        "lambda_base": float(lambda_base),
+        "n_cells": int(len(pool_orig_ids)),
+        "n_spots": int(len(spot_ids)),
+        "n_cells_missing_type_label": 0,
+        "n_cells_missing_type_score": 0,
+        "n_types_with_markers": None,
+        "n_markers_used_total": None,
+        "n_markers_missing_genes": None,
+        "type_score_gene_intersection_ok": None,
+        "type_score_stats": None,
+        "type_score_source": None,
+        "n_cells_considered": 0,
+        "n_actions_generated_total": 0,
+        "n_moves_total": 0,
+        "n_swaps_total": 0,
+        "moves_per_round": [],
+        "n_cells_blocked_base_margin": 0,
+        "n_cells_blocked_type_gain": 0,
+        "n_cells_blocked_base_budget": 0,
+        "n_cells_blocked_partner_hurt": 0,
+        "n_actions_blocked_high_hurt_quota": 0,
+        "n_high_hurt_selected": 0,
+        "n_cells_blocked_swap_no_candidate": 0,
+        "n_cells_blocked_swap_base_budget": 0,
+        "n_cells_blocked_swap_conflict": 0,
+        "n_cells_pass_base_budget": 0,
+        "n_cells_pass_all_gates_pre_conflict": 0,
+        "capacity_violation": False,
+        "capacity_check": None,
+    }
+    if rounds <= 0:
+        meta["skip_reason"] = "rounds=0"
+        return assignments, _assignments_to_matrix(assignments, len(spot_ids), len(pool_orig_ids)).tocsr(), meta
+    if max_changed_cells is not None and int(max_changed_cells) <= 0:
+        meta["skip_reason"] = "max_changed_cells=0"
+        return assignments, _assignments_to_matrix(assignments, len(spot_ids), len(pool_orig_ids)).tocsr(), meta
+
+    n_cells = len(pool_orig_ids)
+    n_spots = len(spot_ids)
+    if n_cells == 0 or n_spots == 0:
+        meta["skip_reason"] = "empty_cells_or_spots"
+        return assignments, _assignments_to_matrix(assignments, n_spots, n_cells).tocsr(), meta
+
+    if type_order is None:
+        type_order = sorted(list(dict.fromkeys([str(x) for x in cell_types])))
+    if not type_order:
+        meta["skip_reason"] = "empty_type_order"
+        return assignments, _assignments_to_matrix(assignments, n_spots, n_cells).tocsr(), meta
+
+    mode = str(mode or "local_prior_swap").strip().lower()
+    if mode in ("", "none", "off"):
+        mode = "local_prior_swap"
+    if mode not in {"local_prior_swap", "local_marker_swap"}:
+        raise ValueError(f"type_post: invalid mode={mode!r}")
+    meta["mode"] = mode
+    if require_gainA_positive is None:
+        require_gainA_positive = True
+    require_gainA_positive = bool(require_gainA_positive)
+    gain_thresh = float(delta_min or 0.0)
+    if not require_gainA_positive:
+        gain_thresh = -gain_thresh
+
+    if swap_target_topk is not None:
+        swap_target_topk = int(swap_target_topk)
+        if swap_target_topk <= 0:
+            swap_target_topk = None
+
+    dm = str(distance_metric or "Pearson_correlation")
+    if dm not in {"Pearson_correlation", "Spearman_correlation", "Euclidean"}:
+        raise ValueError(f"type_post: unsupported distance_metric={dm!r}")
+
+    base_margin_tau = float(base_margin_tau or 0.0)
+    delta_min = float(delta_min or 0.0)
+    swap_scope = str(swap_scope or "a_tieset_only").strip().lower()
+    if swap_scope not in {"a_tieset_only", "a_and_b_tieset"}:
+        raise ValueError(f"type_post: invalid swap_scope={swap_scope!r}")
+    swap_base_mode = str(swap_base_mode or "pair_budget").strip().lower()
+    if swap_base_mode not in {"both_nonpositive", "pair_budget"}:
+        raise ValueError(f"type_post: invalid swap_base_mode={swap_base_mode!r}")
+    selection_mode = str(selection_mode or "global_pool_greedy").strip().lower()
+    if selection_mode not in {"sequential_greedy", "global_pool_greedy"}:
+        raise ValueError(f"type_post: invalid selection_mode={selection_mode!r}")
+    if action_topm is not None:
+        action_topm = int(action_topm)
+    max_swaps_per_round = int(max_swaps_per_round) if max_swaps_per_round is not None else None
+    if lambda_partner < 0 or lambda_base < 0:
+        raise ValueError("type_post: lambda_* must be >= 0")
+    if partner_hurt_max is not None and float(partner_hurt_max) < 0:
+        raise ValueError("type_post: partner_hurt_max must be >= 0")
+    if partner_hurt_max is not None:
+        partner_hurt_max = float(partner_hurt_max)
+    if max_high_hurt_actions is not None:
+        max_high_hurt_actions = int(max_high_hurt_actions)
+        if max_high_hurt_actions < 0:
+            raise ValueError("type_post: max_high_hurt_actions must be >= 0")
+    if high_hurt_threshold is not None:
+        high_hurt_threshold = float(high_hurt_threshold)
+        if high_hurt_threshold < 0:
+            raise ValueError("type_post: high_hurt_threshold must be >= 0")
+    if max_high_hurt_actions is not None and high_hurt_threshold is None:
+        raise ValueError("type_post: high_hurt_threshold required when max_high_hurt_actions is set")
+
+    sc_base = sc_cost.loc[pool_orig_ids, genes_use].to_numpy(dtype=float, copy=False)
+    st_base = st_cost.loc[spot_ids, genes_use].to_numpy(dtype=float, copy=False)
+    sc_base = sc_base * w_full
+    st_base = st_base * w_full
+    if spot_weight_matrix is not None:
+        if spot_weight_matrix.shape[1] != len(genes_use):
+            raise ValueError("type_post: spot_weight_matrix gene dimension mismatch")
+        st_base = st_base * spot_weight_matrix
+    if not np.isfinite(sc_base).all():
+        raise ValueError("type_post: non-finite values in sc_base")
+    if not np.isfinite(st_base).all():
+        raise ValueError("type_post: non-finite values in st_base")
+
+    if dm == "Spearman_correlation":
+        sc_base_use = np.apply_along_axis(rankdata, 1, sc_base)
+        st_base_use = np.apply_along_axis(rankdata, 1, st_base)
+        base_metric = "correlation"
+    elif dm == "Pearson_correlation":
+        sc_base_use = sc_base
+        st_base_use = st_base
+        base_metric = "correlation"
+    else:
+        sc_base_use = sc_base
+        st_base_use = st_base
+        base_metric = "euclidean"
+
+    type_to_idx = {t: i for i, t in enumerate(type_order)}
+    type_idx_by_cell = np.array([type_to_idx.get(str(t), -1) for t in cell_types], dtype=int)
+    missing_type_mask = type_idx_by_cell < 0
+    meta["n_cells_missing_type_label"] = int(missing_type_mask.sum())
+
+    type_score_matrix: Optional[np.ndarray] = None
+    type_has_score: Optional[np.ndarray] = None
+    if mode == "local_marker_swap":
+        marker_source = str(marker_source or "sc_auto_top").strip().lower()
+        gene_weighting = str(gene_weighting or "spot_zscore").strip().lower()
+        markers_per_type = int(markers_per_type or 30)
+        if marker_source not in {"sc_auto_top", "yaml_marker_list"}:
+            raise ValueError(f"type_post: invalid marker_source={marker_source!r}")
+        if gene_weighting not in {"spot_zscore", "none"}:
+            raise ValueError(f"type_post: invalid gene_weighting={gene_weighting!r}")
+        if markers_per_type <= 0:
+            raise ValueError("type_post: markers_per_type must be > 0")
+
+        gene_to_idx = {g: i for i, g in enumerate(genes_use)}
+        markers_by_type: Dict[str, List[str]] = {}
+        marker_missing_genes = 0
+        marker_total_genes = 0
+
+        if marker_source == "yaml_marker_list":
+            if marker_list is None:
+                raise ValueError("type_post: marker_list required when marker_source=yaml_marker_list")
+            if isinstance(marker_list, str):
+                marker_path = Path(marker_list)
+                if not marker_path.exists():
+                    raise ValueError(f"type_post: marker_list file not found: {marker_list}")
+                try:
+                    import yaml  # type: ignore
+                except Exception as e:
+                    raise ValueError("type_post: PyYAML required for marker_list path") from e
+                marker_map = yaml.safe_load(marker_path.read_text(encoding="utf-8")) or {}
+            elif isinstance(marker_list, dict):
+                marker_map = marker_list
+            else:
+                raise ValueError("type_post: marker_list must be dict or path string")
+            for t in type_order:
+                genes = marker_map.get(t, marker_map.get(str(t), [])) or []
+                if not isinstance(genes, (list, tuple)):
+                    raise ValueError(f"type_post: marker_list[{t!r}] must be list")
+                marker_total_genes += len(genes)
+                genes_use_filtered = [g for g in genes if g in gene_to_idx]
+                marker_missing_genes += len(genes) - len(genes_use_filtered)
+                if genes_use_filtered:
+                    markers_by_type[t] = list(dict.fromkeys(genes_use_filtered))
+        else:
+            if sc_meta is None or sc_type_col is None:
+                raise ValueError("type_post: sc_meta/type_col required for marker_source=sc_auto_top")
+            if sc_type_col not in sc_meta.columns:
+                raise ValueError(f"type_post: sc_meta missing type_col={sc_type_col!r}")
+            sc_type_series = sc_meta.reindex(sc_cost.index)[sc_type_col]
+            sc_type_labels = sc_type_series.astype(str).to_numpy()
+            sc_vals = sc_cost.loc[:, genes_use].to_numpy(dtype=float, copy=False)
+            gene_names = list(genes_use)
+            for t in type_order:
+                mask = sc_type_labels == str(t)
+                if not np.any(mask):
+                    continue
+                mean_expr = np.mean(sc_vals[mask], axis=0)
+                topk = min(markers_per_type, mean_expr.shape[0])
+                idx = np.argpartition(-mean_expr, topk - 1)[:topk]
+                idx = idx[np.argsort(-mean_expr[idx])]
+                genes_sel = [gene_names[i] for i in idx]
+                if genes_sel:
+                    markers_by_type[t] = genes_sel
+                marker_total_genes += len(genes_sel)
+
+        n_types_with_markers = len(markers_by_type)
+        n_markers_used_total = int(sum(len(v) for v in markers_by_type.values()))
+        meta["marker_source"] = marker_source
+        meta["markers_per_type"] = int(markers_per_type)
+        meta["gene_weighting"] = gene_weighting
+        meta["n_types_with_markers"] = int(n_types_with_markers)
+        meta["n_markers_total"] = int(marker_total_genes)
+        meta["n_markers_used_total"] = int(n_markers_used_total)
+        meta["n_markers_missing_genes"] = int(marker_missing_genes)
+        meta["type_score_gene_intersection_ok"] = bool(marker_missing_genes == 0)
+        meta["type_score_source"] = "marker_score"
+
+        if n_types_with_markers <= 0 or n_markers_used_total <= 0:
+            meta["skip_reason"] = "no_markers_available"
+            return assignments, _assignments_to_matrix(assignments, n_spots, n_cells).tocsr(), meta
+
+        st_vals = st_cost.loc[spot_ids, genes_use].to_numpy(dtype=float, copy=False)
+        if not np.isfinite(st_vals).all():
+            raise ValueError("type_post: non-finite values in st_cost for marker scoring")
+        if gene_weighting == "spot_zscore":
+            mean = st_vals.mean(axis=0)
+            std = st_vals.std(axis=0)
+            std[std == 0] = 1.0
+            st_vals = (st_vals - mean) / std
+
+        type_score_matrix = np.full((n_spots, len(type_order)), np.nan, dtype=float)
+        type_has_score = np.zeros(len(type_order), dtype=bool)
+        for t, idx in type_to_idx.items():
+            genes = markers_by_type.get(t)
+            if not genes:
+                continue
+            gene_idx = [gene_to_idx[g] for g in genes if g in gene_to_idx]
+            if not gene_idx:
+                continue
+            type_score_matrix[:, idx] = st_vals[:, gene_idx].mean(axis=1)
+            type_has_score[idx] = True
+
+        finite_vals = type_score_matrix[np.isfinite(type_score_matrix)]
+        if finite_vals.size == 0:
+            meta["skip_reason"] = "type_score_all_nan"
+            return assignments, _assignments_to_matrix(assignments, n_spots, n_cells).tocsr(), meta
+        if not np.isfinite(finite_vals).all():
+            raise ValueError("type_post: non-finite values in type_score_matrix")
+        meta["type_score_stats"] = {
+            "min": float(np.min(finite_vals)),
+            "p50": float(np.percentile(finite_vals, 50)),
+            "max": float(np.max(finite_vals)),
+        }
+    else:
+        meta["type_score_source"] = "spot_type_fraction"
+
+    current_spot = np.full(n_cells, -1, dtype=int)
+    for cell_idx, spot_idx, _ in assignments:
+        current_spot[cell_idx] = int(spot_idx)
+    if (current_spot < 0).any():
+        raise ValueError("type_post: missing assignments for some cells")
+
+    spot_neighbors = _build_spot_neighbor_sets(st_coords, neighbor_k)
+    if len(spot_neighbors) != n_spots:
+        raise ValueError("type_post: neighbor list size mismatch")
+
+    cells_by_spot: List[List[int]] = [[] for _ in range(n_spots)]
+    for c, s in enumerate(current_spot):
+        cells_by_spot[int(s)].append(c)
+    occupancy = np.array([len(x) for x in cells_by_spot], dtype=int)
+    cap = np.asarray(capacity, dtype=int)
+    if cap.shape[0] != n_spots:
+        raise ValueError("type_post: capacity length mismatch")
+
+    def _scaled_tau(tau: float, best: float) -> float:
+        return float(tau) * max(1.0, abs(float(best)))
+
+    def _score_cell_spots_base(cell_idx: int, spots: List[int]) -> np.ndarray:
+        vec = sc_base_use[cell_idx][None, :]
+        cand = st_base_use[np.array(spots, dtype=int)]
+        if base_metric == "correlation":
+            scores = cdist(vec, cand, metric="correlation")[0]
+        else:
+            scores = cdist(vec, cand, metric="euclidean")[0]
+        if not np.isfinite(scores).all():
+            raise ValueError("type_post: non-finite values in base_cost")
+        return scores
+
+    moves_total = 0
+    swaps_total = 0
+    moves_per_round: List[int] = []
+    blocked_base_margin = np.zeros(n_cells, dtype=bool)
+    blocked_type_gain = np.zeros(n_cells, dtype=bool)
+    blocked_base_budget = np.zeros(n_cells, dtype=bool)
+    blocked_partner_hurt = np.zeros(n_cells, dtype=bool)
+    blocked_swap_no_candidate = np.zeros(n_cells, dtype=bool)
+    blocked_swap_base_budget = np.zeros(n_cells, dtype=bool)
+    blocked_swap_conflict = np.zeros(n_cells, dtype=bool)
+    pass_base_budget = np.zeros(n_cells, dtype=bool)
+    pass_all_gates_pre_conflict = np.zeros(n_cells, dtype=bool)
+    selected_actions: List[Dict[str, Any]] = []
+    high_hurt_selected = 0
+
+    def _record_action(
+        *,
+        action_type: str,
+        c: int,
+        s: int,
+        t: int,
+        gain_a: float,
+        gain_b: float,
+        gain_sum: float,
+        partner_hurt: float,
+        base_pair_sum: float,
+        c2: Optional[int] = None,
+    ) -> None:
+        row = {
+            "action_type": str(action_type),
+            "cell_id": str(pool_orig_ids[c]),
+            "cell_idx": int(c),
+            "cell_type": str(cell_types[c]),
+            "from_spot": str(spot_ids[s]),
+            "to_spot": str(spot_ids[t]),
+            "spot_from_idx": int(s),
+            "spot_to_idx": int(t),
+            "gainA": float(gain_a),
+            "gainB": float(gain_b),
+            "gainSum": float(gain_sum),
+            "partner_hurt": float(partner_hurt),
+            "base_pair_sum": float(base_pair_sum),
+            "partner_cell_id": str(pool_orig_ids[c2]) if c2 is not None else None,
+            "partner_cell_idx": int(c2) if c2 is not None else None,
+            "partner_cell_type": str(cell_types[c2]) if c2 is not None else None,
+        }
+        selected_actions.append(row)
+
+    base_spot = current_spot.copy()
+    n_types = len(type_order)
+    for r in range(int(rounds)):
+        if mode == "local_marker_swap":
+            spot_type_frac = type_score_matrix
+        else:
+            counts = np.zeros((n_spots, n_types), dtype=float)
+            valid = ~missing_type_mask
+            np.add.at(counts, (current_spot[valid], type_idx_by_cell[valid]), 1)
+            row_sum = counts.sum(axis=1, keepdims=True)
+            row_sum[row_sum == 0] = 1.0
+            spot_type_frac = counts / row_sum
+
+        proposals: List[Tuple[float, int, int, List[int], List[float], Dict[int, float]]] = []
+        moves_round = 0
+        swaps_round = 0
+        n_cells_considered = 0
+        for c in range(n_cells):
+            t_idx = int(type_idx_by_cell[c])
+            if t_idx < 0:
+                continue
+            s = int(current_spot[c])
+            cand = [s] + spot_neighbors[s]
+            if len(cand) <= 1:
+                continue
+            base_scores = _score_cell_spots_base(c, cand)
+            best_idx = int(np.argmin(base_scores))
+            best_base = float(base_scores[best_idx])
+            margin = _scaled_tau(base_margin_tau, best_base)
+            tie_idx = np.where(base_scores <= best_base + margin)[0]
+            if 0 not in tie_idx:
+                blocked_base_margin[c] = True
+                continue
+            if len(tie_idx) <= 1:
+                continue
+            n_cells_considered += 1
+            tie_spots = [cand[i] for i in tie_idx if int(i) != 0]
+            if mode == "local_marker_swap":
+                if type_has_score is not None and not type_has_score[t_idx]:
+                    meta["n_cells_missing_type_score"] += 1
+                    continue
+                cand_targets = [spot for spot in cand if spot != s]
+                if not cand_targets:
+                    continue
+                score_s = float(spot_type_frac[s, t_idx])
+                if not np.isfinite(score_s):
+                    meta["n_cells_missing_type_score"] += 1
+                    continue
+                target_scores_all = spot_type_frac[np.array(cand_targets, dtype=int), t_idx]
+                if target_scores_all.size == 0:
+                    continue
+                valid_mask = np.isfinite(target_scores_all)
+                if not np.any(valid_mask):
+                    meta["n_cells_missing_type_score"] += 1
+                    continue
+                cand_targets = [spot for spot, ok in zip(cand_targets, valid_mask) if ok]
+                target_scores_all = target_scores_all[valid_mask]
+                if swap_target_topk is not None and len(cand_targets) > swap_target_topk:
+                    idx = np.argpartition(-target_scores_all, swap_target_topk - 1)[:swap_target_topk]
+                    idx = idx[np.argsort(-target_scores_all[idx])]
+                    cand_targets = [cand_targets[i] for i in idx]
+                    target_scores_all = target_scores_all[idx]
+                tie_spots = cand_targets
+                target_scores = target_scores_all
+            else:
+                if not tie_spots:
+                    continue
+                score_s = float(spot_type_frac[s, t_idx])
+                target_scores = spot_type_frac[np.array(tie_spots, dtype=int), t_idx]
+            if not tie_spots:
+                continue
+            gains = target_scores - score_s
+            base_score_map = {int(spot): float(score) for spot, score in zip(cand, base_scores)}
+            proposals.append((score_s, c, s, tie_spots, gains.tolist(), base_score_map))
+
+        if not proposals:
+            break
+
+        max_moves = n_cells
+        if max_changed_cells is not None:
+            remaining_allowed = max_changed_cells - moves_total
+            if remaining_allowed <= 0:
+                break
+            max_moves = min(max_moves, remaining_allowed)
+
+        if selection_mode == "global_pool_greedy":
+            actions_by_cell: Dict[int, List[Tuple[str, float, float, float, float, float, float, bool, int, int, int, Optional[int]]]] = {}
+            for score_s, c, s, tie_spots, gains, base_score_map in proposals:
+                best_move = None
+                best_swap = None
+                has_gain_candidate = False
+                pass_base_budget_cell = False
+                base_s = float(base_score_map.get(int(s), 0.0))
+                for spot, gain_a in zip(tie_spots, gains):
+                    if gain_a <= gain_thresh:
+                        continue
+                    has_gain_candidate = True
+                    base_target = float(base_score_map.get(int(spot), base_s))
+                    delta_base_a = base_target - base_s
+                    if delta_base_a > 0:
+                        continue
+                    pass_base_budget_cell = True
+                    if occupancy[spot] < cap[spot]:
+                        select_score = float(gain_a - (lambda_base * delta_base_a))
+                        if best_move is None or select_score > best_move[1]:
+                            best_move = (
+                                "move",
+                                select_score,
+                                float(gain_a),
+                                0.0,
+                                float(gain_a),
+                                float(delta_base_a),
+                                0.0,
+                                False,
+                                s,
+                                spot,
+                                c,
+                                None,
+                            )
+                        continue
+                    if not allow_swap:
+                        continue
+                    partner_pool = [c2 for c2 in cells_by_spot[spot] if c2 != c]
+                    if not partner_pool:
+                        blocked_swap_no_candidate[c] = True
+                        continue
+                    best_swap_for_target = None
+                    for c2 in partner_pool:
+                        if swap_scope == "a_and_b_tieset":
+                            cand2 = [spot] + spot_neighbors[spot]
+                            if s not in cand2:
+                                continue
+                            base_scores2 = _score_cell_spots_base(c2, cand2)
+                            best_base2 = float(np.min(base_scores2))
+                            margin2 = _scaled_tau(base_margin_tau, best_base2)
+                            tie_idx2 = np.where(base_scores2 <= best_base2 + margin2)[0]
+                            if 0 not in tie_idx2:
+                                continue
+                            idx_s2 = cand2.index(s)
+                            if idx_s2 not in tie_idx2:
+                                continue
+                        base_c2 = _score_cell_spots_base(c2, [spot, s])
+                        delta_base_c2 = float(base_c2[1] - base_c2[0])
+                        delta_base_sum = float(delta_base_a + delta_base_c2)
+                        if swap_base_mode == "both_nonpositive":
+                            if delta_base_c2 > 0:
+                                continue
+                        elif swap_base_mode == "pair_budget":
+                            if delta_base_sum > base_pair_budget_eps:
+                                continue
+                        pass_base_budget_cell = True
+                        t_idx_b = int(type_idx_by_cell[c2])
+                        if t_idx_b < 0:
+                            continue
+                        if type_has_score is not None and not type_has_score[t_idx_b]:
+                            continue
+                        score_c2_t = float(spot_type_frac[spot, t_idx_b])
+                        score_c2_s = float(spot_type_frac[s, t_idx_b])
+                        if not (np.isfinite(score_c2_t) and np.isfinite(score_c2_s)):
+                            continue
+                        gain_b = float(score_c2_s - score_c2_t)
+                        gain_sum = float(gain_a + gain_b)
+                        partner_hurt = max(0.0, -gain_b)
+                        if partner_hurt_max is not None and partner_hurt > partner_hurt_max:
+                            blocked_partner_hurt[c] = True
+                            continue
+                        is_high_hurt = bool(
+                            high_hurt_threshold is not None and partner_hurt > float(high_hurt_threshold)
+                        )
+                        select_score = float(gain_a - (lambda_partner * partner_hurt) - (lambda_base * delta_base_sum))
+                        if best_swap_for_target is None or select_score > best_swap_for_target[1]:
+                            best_swap_for_target = (
+                                "swap",
+                                select_score,
+                                float(gain_a),
+                                float(gain_b),
+                                float(gain_sum),
+                                float(delta_base_sum),
+                                float(partner_hurt),
+                                is_high_hurt,
+                                s,
+                                spot,
+                                c,
+                                int(c2),
+                            )
+                    if best_swap_for_target is not None:
+                        if best_swap is None or best_swap_for_target[1] > best_swap[1]:
+                            best_swap = best_swap_for_target
+                if not has_gain_candidate:
+                    blocked_type_gain[c] = True
+                elif not pass_base_budget_cell:
+                    blocked_base_budget[c] = True
+                else:
+                    pass_base_budget[c] = True
+                    pass_all_gates_pre_conflict[c] = True
+                if best_move is not None:
+                    actions_by_cell.setdefault(c, []).append(best_move)
+                if best_swap is not None:
+                    actions_by_cell.setdefault(c, []).append(best_swap)
+
+            action_pool: List[Tuple[str, float, float, float, float, float, float, bool, int, int, int, Optional[int]]] = []
+            for c, acts in actions_by_cell.items():
+                acts.sort(key=lambda x: x[1], reverse=True)
+                if action_topm is not None and action_topm > 0:
+                    acts = acts[:action_topm]
+                action_pool.extend(acts)
+            action_pool.sort(key=lambda x: (-x[1], x[5]))
+            meta["n_actions_generated_total"] += int(len(action_pool))
+            used_cells: set[int] = set()
+            for action in action_pool:
+                if moves_round >= max_moves:
+                    break
+                (
+                    action_type,
+                    select_score,
+                    gain_a,
+                    gain_b,
+                    gain_sum,
+                    base_pair_sum,
+                    partner_hurt,
+                    is_high_hurt,
+                    s,
+                    t,
+                    c,
+                    c2,
+                ) = action
+                if c in used_cells:
+                    if action_type == "swap":
+                        blocked_swap_conflict[c] = True
+                    continue
+                if action_type == "swap" and c2 is not None and c2 in used_cells:
+                    blocked_swap_conflict[c] = True
+                    continue
+                if action_type == "swap" and is_high_hurt and max_high_hurt_actions is not None:
+                    if high_hurt_selected >= max_high_hurt_actions:
+                        meta["n_actions_blocked_high_hurt_quota"] += 1
+                        continue
+                if action_type == "move":
+                    if int(current_spot[c]) != s:
+                        continue
+                    if occupancy[t] >= cap[t]:
+                        continue
+                    current_spot[c] = t
+                    occupancy[s] -= 1
+                    occupancy[t] += 1
+                    cells_by_spot[s].remove(c)
+                    cells_by_spot[t].append(c)
+                    moves_round += 1
+                    moves_total += 1
+                    used_cells.add(c)
+                    _record_action(
+                        action_type="move",
+                        c=c,
+                        s=s,
+                        t=t,
+                        gain_a=float(gain_a),
+                        gain_b=0.0,
+                        gain_sum=float(gain_a),
+                        partner_hurt=0.0,
+                        base_pair_sum=float(base_pair_sum),
+                        c2=None,
+                    )
+                else:
+                    if max_swaps_per_round is not None and swaps_round >= max_swaps_per_round:
+                        blocked_swap_conflict[c] = True
+                        continue
+                    if c2 is None:
+                        blocked_swap_conflict[c] = True
+                        continue
+                    if int(current_spot[c]) != s or int(current_spot[c2]) != t:
+                        blocked_swap_conflict[c] = True
+                        continue
+                    if moves_round + 2 > max_moves:
+                        blocked_swap_conflict[c] = True
+                        continue
+                    current_spot[c] = t
+                    current_spot[c2] = s
+                    cells_by_spot[s].remove(c)
+                    cells_by_spot[t].append(c)
+                    cells_by_spot[t].remove(c2)
+                    cells_by_spot[s].append(c2)
+                    moves_round += 2
+                    moves_total += 2
+                    swaps_total += 1
+                    swaps_round += 1
+                    used_cells.add(c)
+                    used_cells.add(int(c2))
+                    if is_high_hurt:
+                        high_hurt_selected += 1
+                    _record_action(
+                        action_type="swap",
+                        c=c,
+                        s=s,
+                        t=t,
+                        gain_a=float(gain_a),
+                        gain_b=float(gain_b),
+                        gain_sum=float(gain_sum),
+                        partner_hurt=float(partner_hurt),
+                        base_pair_sum=float(base_pair_sum),
+                        c2=int(c2),
+                    )
+        else:
+            for score_s, c, s, tie_spots, gains, base_score_map in proposals:
+                if moves_round >= max_moves:
+                    break
+                best_target = None
+                best_gain = None
+                base_s = float(base_score_map.get(int(s), 0.0))
+                best_delta_base = None
+                for spot, gain_a in zip(tie_spots, gains):
+                    if gain_a <= gain_thresh:
+                        continue
+                    base_target = float(base_score_map.get(int(spot), base_s))
+                    delta_base_a = base_target - base_s
+                    if delta_base_a > 0:
+                        continue
+                    if best_gain is None or gain_a > best_gain:
+                        best_gain = float(gain_a)
+                        best_target = int(spot)
+                        best_delta_base = float(delta_base_a)
+                if best_target is None:
+                    blocked_type_gain[c] = True
+                    continue
+                if occupancy[best_target] < cap[best_target]:
+                    current_spot[c] = best_target
+                    occupancy[s] -= 1
+                    occupancy[best_target] += 1
+                    cells_by_spot[s].remove(c)
+                    cells_by_spot[best_target].append(c)
+                    moves_round += 1
+                    moves_total += 1
+                    pass_base_budget[c] = True
+                    pass_all_gates_pre_conflict[c] = True
+                    _record_action(
+                        action_type="move",
+                        c=c,
+                        s=s,
+                        t=best_target,
+                        gain_a=float(best_gain),
+                        gain_b=0.0,
+                        gain_sum=float(best_gain),
+                        partner_hurt=0.0,
+                        base_pair_sum=float(best_delta_base or 0.0),
+                        c2=None,
+                    )
+                elif allow_swap and (max_swaps_per_round is None or swaps_round < max_swaps_per_round):
+                    partner_pool = [c2 for c2 in cells_by_spot[best_target] if c2 != c]
+                    if not partner_pool:
+                        blocked_swap_no_candidate[c] = True
+                        continue
+                    for c2 in partner_pool:
+                        if moves_round + 2 > max_moves:
+                            break
+                        t_idx_b = int(type_idx_by_cell[c2])
+                        if t_idx_b < 0:
+                            continue
+                        if type_has_score is not None and not type_has_score[t_idx_b]:
+                            continue
+                        base_c2 = _score_cell_spots_base(c2, [best_target, s])
+                        delta_base_c2 = float(base_c2[1] - base_c2[0])
+                        delta_base_sum = float((best_delta_base or 0.0) + delta_base_c2)
+                        if swap_base_mode == "both_nonpositive":
+                            if delta_base_c2 > 0:
+                                continue
+                        elif swap_base_mode == "pair_budget":
+                            if delta_base_sum > base_pair_budget_eps:
+                                continue
+                        score_c2_t = float(spot_type_frac[best_target, t_idx_b])
+                        score_c2_s = float(spot_type_frac[s, t_idx_b])
+                        if not (np.isfinite(score_c2_t) and np.isfinite(score_c2_s)):
+                            continue
+                        gain_b = float(score_c2_s - score_c2_t)
+                        partner_hurt = max(0.0, -gain_b)
+                        if partner_hurt_max is not None and partner_hurt > partner_hurt_max:
+                            blocked_partner_hurt[c] = True
+                            continue
+                        is_high_hurt = bool(
+                            high_hurt_threshold is not None and partner_hurt > float(high_hurt_threshold)
+                        )
+                        if is_high_hurt and max_high_hurt_actions is not None and high_hurt_selected >= max_high_hurt_actions:
+                            meta["n_actions_blocked_high_hurt_quota"] += 1
+                            continue
+                        current_spot[c] = best_target
+                        current_spot[c2] = s
+                        cells_by_spot[s].remove(c)
+                        cells_by_spot[best_target].append(c)
+                        cells_by_spot[best_target].remove(c2)
+                        cells_by_spot[s].append(c2)
+                        moves_round += 2
+                        moves_total += 2
+                        swaps_total += 1
+                        swaps_round += 1
+                        pass_base_budget[c] = True
+                        pass_all_gates_pre_conflict[c] = True
+                        if is_high_hurt:
+                            high_hurt_selected += 1
+                        _record_action(
+                            action_type="swap",
+                            c=c,
+                            s=s,
+                            t=best_target,
+                            gain_a=float(best_gain),
+                            gain_b=float(gain_b),
+                            gain_sum=float(best_gain + gain_b),
+                            partner_hurt=float(partner_hurt),
+                            base_pair_sum=float(delta_base_sum),
+                            c2=int(c2),
+                        )
+                        break
+                else:
+                    blocked_base_budget[c] = True
+
+        moves_per_round.append(moves_round)
+        meta["rounds_executed"] = r + 1
+        meta["n_cells_considered"] += int(n_cells_considered)
+        if moves_round == 0:
+            break
+        if (occupancy > cap).any():
+            current_spot = base_spot.copy()
+            meta["status"] = "capacity_violation_reverted"
+            meta["capacity_violation"] = True
+            break
+
+    counts = np.bincount(current_spot, minlength=n_spots)
+    cap_diff = counts - cap
+    meta["capacity_check"] = {
+        "max_overflow": int(np.max(cap_diff)) if len(cap_diff) else 0,
+        "max_underfill": int(np.max(-cap_diff)) if len(cap_diff) else 0,
+        "n_spots_overflow": int(np.sum(cap_diff > 0)),
+        "n_spots_underfill": int(np.sum(cap_diff < 0)),
+    }
+
+    assignments_out = [(int(c), int(s), 1.0) for c, s in enumerate(current_spot)]
+    hard_mat = _assignments_to_matrix(assignments_out, n_spots, n_cells).tocsr()
+    changed = int(np.sum(current_spot != base_spot))
+    meta.update(
+        {
+            "status": "ok" if not meta["capacity_violation"] else meta["status"],
+            "n_moves_total": int(moves_total),
+            "n_swaps_total": int(swaps_total),
+            "moves_per_round": moves_per_round,
+            "n_cells_blocked_base_margin": int(np.sum(blocked_base_margin)),
+            "n_cells_blocked_type_gain": int(np.sum(blocked_type_gain)),
+            "n_cells_blocked_base_budget": int(np.sum(blocked_base_budget)),
+            "n_cells_blocked_partner_hurt": int(np.sum(blocked_partner_hurt)),
+            "n_cells_blocked_swap_no_candidate": int(np.sum(blocked_swap_no_candidate)),
+            "n_cells_blocked_swap_base_budget": int(np.sum(blocked_swap_base_budget)),
+            "n_cells_blocked_swap_conflict": int(np.sum(blocked_swap_conflict)),
+            "n_cells_pass_base_budget": int(np.sum(pass_base_budget)),
+            "n_cells_pass_all_gates_pre_conflict": int(np.sum(pass_all_gates_pre_conflict)),
+            "n_actions_generated_total": int(meta["n_actions_generated_total"]),
+            "n_actions_blocked_high_hurt_quota": int(meta["n_actions_blocked_high_hurt_quota"]),
+            "n_high_hurt_selected": int(high_hurt_selected),
+            "selected_actions": selected_actions,
+            "n_changed_cells": int(changed),
+            "changed_rate": float(changed / max(1, n_cells)),
+        }
+    )
+    return assignments_out, hard_mat, meta
+
+
 def _write_meta(out_dir: Path, meta: Dict[str, Any]):
     with (out_dir / "meta.json").open("w", encoding="utf-8") as f:
         json.dump(meta, f, ensure_ascii=False, indent=2)
@@ -1538,7 +3907,7 @@ def _harden_assignment_quota_matching(
     mat: csr_matrix,
     capacity: np.ndarray,
     cell_types: List[str],
-    type_prior: pd.DataFrame,
+    type_prior: Optional[pd.DataFrame],
     spot_ids: List[str],
     lambda_prior: float,
     eps: float = 1e-8,
@@ -1565,43 +3934,51 @@ def _harden_assignment_quota_matching(
     if fallback_assignments:
         for cidx, sidx, _ in fallback_assignments:
             fallback_map[cidx] = sidx
-    # 对齐 type_prior：按 spot 顺序、type 顺序重排
-    type_cols = list(type_prior.columns)
-    type_prior_aligned = type_prior.reindex(index=spot_ids).reindex(columns=type_cols)
-    if type_prior_aligned.isna().all(axis=None):
-        raise ValueError("type_prior 对齐后全部为 NaN，spot_id 或列名未匹配")
-    prior_row_nonzero = (~(type_prior_aligned.fillna(0.0) == 0).all(axis=1)).mean()
-    prior_row_entropy = []
-    prior_filled = type_prior_aligned.fillna(0.0)
-    for _, row in prior_filled.iterrows():
-        p = row.to_numpy(dtype=float)
-        p_sum = p.sum()
-        if p_sum <= 0:
-            prior_row_entropy.append(0.0)
-        else:
-            p = p / p_sum
-            prior_row_entropy.append(-float(np.sum(p * np.log(p + eps))))
-    prior_entropy_mean = float(np.mean(prior_row_entropy)) if prior_row_entropy else 0.0
-    prior_entropy_max = float(np.max(prior_row_entropy)) if prior_row_entropy else 0.0
-    prior_np = type_prior_aligned.fillna(0.0).to_numpy(dtype=float, copy=False)
-    type_to_col = {t: i for i, t in enumerate(type_cols)}
+    use_type_prior = type_prior is not None
+    type_cols: List[str] = []
+    type_to_col: Dict[str, int] = {}
+    prior_row_nonzero = None
+    prior_entropy_mean = None
+    prior_entropy_max = None
+    prior_np: Optional[np.ndarray] = None
+    prior_topk_by_type: Optional[List[List[int]]] = None
     prior_candidate_topk = int(prior_candidate_topk or 0)
     prior_candidate_weight = float(1.0 if prior_candidate_weight is None else prior_candidate_weight)
-    prior_topk_by_type: Optional[List[List[int]]] = None
-    if lambda_prior and prior_candidate_topk > 0:
-        k = min(prior_candidate_topk, n_spots)
-        prior_topk_by_type = []
-        for t_idx in range(len(type_cols)):
-            col = prior_np[:, t_idx]
-            if k >= n_spots:
-                idx = np.argsort(-col)
+    if use_type_prior:
+        type_cols = list(type_prior.columns)
+        type_prior_aligned = type_prior.reindex(index=spot_ids).reindex(columns=type_cols)
+        if type_prior_aligned.isna().all(axis=None):
+            raise ValueError('type_prior alignment failed: spot_id or columns mismatch')
+        prior_row_nonzero = (~(type_prior_aligned.fillna(0.0) == 0).all(axis=1)).mean()
+        prior_row_entropy = []
+        prior_filled = type_prior_aligned.fillna(0.0)
+        for _, row in prior_filled.iterrows():
+            p = row.to_numpy(dtype=float)
+            p_sum = p.sum()
+            if p_sum <= 0:
+                prior_row_entropy.append(0.0)
             else:
-                idx = np.argpartition(-col, k - 1)[:k]
-                idx = idx[np.argsort(-col[idx])]
-            prior_topk_by_type.append(idx.tolist())
-    if prior_row_nonzero < min_prior_row_nonzero_ratio:
-        raise ValueError(f"type_prior 非零行比例过低: {prior_row_nonzero:.3f} < {min_prior_row_nonzero_ratio}")
-
+                p = p / p_sum
+                prior_row_entropy.append(-float(np.sum(p * np.log(p + eps))))
+        prior_entropy_mean = float(np.mean(prior_row_entropy)) if prior_row_entropy else 0.0
+        prior_entropy_max = float(np.max(prior_row_entropy)) if prior_row_entropy else 0.0
+        prior_np = type_prior_aligned.fillna(0.0).to_numpy(dtype=float, copy=False)
+        type_to_col = {t: i for i, t in enumerate(type_cols)}
+        if lambda_prior and prior_candidate_topk > 0:
+            k = min(prior_candidate_topk, n_spots)
+            prior_topk_by_type = []
+            for t_idx in range(len(type_cols)):
+                col = prior_np[:, t_idx]
+                if k >= n_spots:
+                    idx = np.argsort(-col)
+                else:
+                    idx = np.argpartition(-col, k - 1)[:k]
+                    idx = idx[np.argsort(-col[idx])]
+                prior_topk_by_type.append(idx.tolist())
+        if prior_row_nonzero < min_prior_row_nonzero_ratio:
+            raise ValueError(
+                f'type_prior nonzero-row ratio too low: {prior_row_nonzero:.3f} < {min_prior_row_nonzero_ratio}'
+            )
     candidates: List[List[Tuple[int, float]]] = []
     local_change = 0
     for c in range(n_cells):
@@ -1620,16 +3997,16 @@ def _harden_assignment_quota_matching(
         if c in fallback_map:
             cand_dict.setdefault(fallback_map[c], 0.0)
         cand_list: List[Tuple[int, float]] = []
-        type_col = type_to_col.get(cell_types[c], None)
+        type_col = type_to_col.get(cell_types[c], None) if use_type_prior else None
         best_score_only = None
-        if lambda_prior and prior_topk_by_type is not None and type_col is not None:
+        if use_type_prior and lambda_prior and prior_topk_by_type is not None and type_col is not None:
             for r in prior_topk_by_type[type_col]:
                 if r not in cand_dict:
                     cand_dict[r] = prior_candidate_weight * float(prior_np[r, type_col])
         for r, v in cand_dict.items():
-            prior_val = prior_np[r, type_col] if (type_col is not None and r < prior_np.shape[0]) else 0.0
+            prior_val = prior_np[r, type_col] if (use_type_prior and type_col is not None and prior_np is not None and r < prior_np.shape[0]) else 0.0
             u = np.log(v + eps)
-            if lambda_prior:
+            if use_type_prior and lambda_prior:
                 u += float(lambda_prior) * np.log(prior_val + eps)
             cand_list.append((r, u))
             if best_score_only is None or v > best_score_only[1]:
@@ -1637,8 +4014,8 @@ def _harden_assignment_quota_matching(
         # 候选为空时，尝试 fallback spot
         if not cand_list and c in fallback_map:
             r = fallback_map[c]
-            prior_val = prior_np[r, type_col] if (type_col is not None and r < prior_np.shape[0]) else 0.0
-            u = float(lambda_prior) * np.log(prior_val + eps) if lambda_prior else 0.0
+            prior_val = prior_np[r, type_col] if (use_type_prior and type_col is not None and prior_np is not None and r < prior_np.shape[0]) else 0.0
+            u = float(lambda_prior) * np.log(prior_val + eps) if (use_type_prior and lambda_prior) else 0.0
             cand_list.append((r, u))
         cand_list.sort(key=lambda x: x[1], reverse=True)
         candidates.append(cand_list)
@@ -1712,9 +4089,10 @@ def _harden_assignment_quota_matching(
             avail = np.where(rem > 0)[0]
             if avail.size == 0:
                 break
-            type_col = type_to_col.get(cell_types[c], None)
-            if type_col is None:
-                s = int(avail[0])
+            type_col = type_to_col.get(cell_types[c], None) if use_type_prior else None
+            if not use_type_prior or type_col is None or prior_np is None:
+                rem_vals = rem[avail]
+                s = int(avail[int(np.argmax(rem_vals))])
             else:
                 col = prior_np[avail, type_col]
                 s = int(avail[int(np.argmax(col))])
@@ -1753,10 +4131,10 @@ def _harden_assignment_quota_matching(
         },
         "n_unassigned_cells": n_unassigned,
         "n_cells_total": int(n_cells),
-        "type_prior_row_index_type": str(type_prior.index.__class__.__name__),
-        "type_prior_row_nonzero_ratio": float(prior_row_nonzero),
-        "type_prior_row_entropy_mean": prior_entropy_mean,
-        "type_prior_row_entropy_max": prior_entropy_max,
+        "type_prior_row_index_type": str(type_prior.index.__class__.__name__) if use_type_prior else None,
+        "type_prior_row_nonzero_ratio": float(prior_row_nonzero) if prior_row_nonzero is not None else None,
+        "type_prior_row_entropy_mean": prior_entropy_mean if use_type_prior else None,
+        "type_prior_row_entropy_max": prior_entropy_max if use_type_prior else None,
         "prior_local_top1_change_rate": float(local_change / n_cells) if n_cells > 0 else 0.0,
         "prior_candidate_topk": int(prior_candidate_topk),
         "prior_candidate_weight": float(prior_candidate_weight),
@@ -2015,6 +4393,13 @@ class CytoSPACEBackend(MappingBackend):
             "capacity_audit": locals().get("capacity_audit", None),
             "cell_id_space": "original_cid",
             "cell_instance_id_column": "unique_cid",
+            "cell_assignment_sha1_pre": locals().get("cell_assignment_sha1_pre"),
+            "cell_assignment_sha1_post": locals().get("cell_assignment_sha1_post"),
+            "cell_assignment_sha1_post_file": locals().get("cell_assignment_sha1_post_file"),
+            "selected_actions_path": str(out_dir / "selected_actions.csv") if (out_dir / "selected_actions.csv").exists() else None,
+            "selected_type_actions_path": str(out_dir / "selected_type_actions.csv")
+            if (out_dir / "selected_type_actions.csv").exists()
+            else None,
             "cells_per_spot_source": locals().get("cps_source", None),
             "umi_to_cell_norm": locals().get("norm_val", None),
             "has_capacity_constraint": status == "success",
@@ -2054,6 +4439,45 @@ class CytoSPACEBackend(MappingBackend):
         try:
             config, config_validation = _validate_and_resolve_config(config, context="plus")
             config_effective_subset = {k: config.get(k) for k in _CONFIG_EFFECTIVE_KEYS if k in config}
+            type_posterior_enabled_cfg = bool(config.get("type_posterior_enabled", True))
+            type_posterior_enabled = bool(type_posterior_enabled_cfg)
+            type_posterior_skipped_reason = None
+            if not type_posterior_enabled_cfg:
+                type_posterior_skipped_reason = "disabled_by_config"
+            type_post_mode = config.get("type_post_mode")
+            if type_post_mode in (None, ""):
+                type_post_mode = None
+            else:
+                type_post_mode = str(type_post_mode).strip().lower()
+                if type_post_mode in ("off", "none"):
+                    type_post_mode = None
+            type_post_enabled = bool(type_posterior_enabled_cfg) and type_post_mode is not None
+            type_prior_enabled = bool(type_posterior_enabled_cfg) and not type_post_enabled
+            type_post_skipped_reason = None
+            if not type_post_enabled:
+                type_post_skipped_reason = "disabled_by_config" if not type_posterior_enabled_cfg else "type_post_mode=off"
+            svg_post_enabled = bool(config.get("svg_post_enabled", False))
+            svg_post_meta: Dict[str, Any] = {
+                "status": "skipped",
+                "skip_reason": "disabled_by_config" if not svg_post_enabled else None,
+            }
+            svg_post_used = False
+            type_post_meta: Dict[str, Any] = {"status": "skipped", "skip_reason": type_post_skipped_reason}
+            type_post_used = False
+            type_post_effective_subset = None
+            cost_mode_effective = None
+            spot_weight_mode_effective = None
+            cost_matrix_sha1 = None
+            cost_matrix_sha1_no_spot_weight = None
+            part1_knobs_no_effect = False
+            type_prior = None
+            type_prior_raw = None
+            type_prior_norm = None
+            missing_type_cols = []
+            n_cells_missing_type = 0
+            ratio_cells_missing_type = 0.0
+            prior_intersection = None
+            missing_prior_examples = []
 
             sc_expr, st_expr, sc_meta, st_coords, type_col = _load_stage1(stage1_dir)
             _assert_unique_index(sc_expr, "sc_expr")
@@ -2078,7 +4502,10 @@ class CytoSPACEBackend(MappingBackend):
 
             spot_ids = list(st_expr.index)
             plugin_genes, weight_map, weight_field, gene_weights = _load_stage2(stage2_dir)
-            relabel, type_prior = _load_stage3(stage3_dir)
+            if type_prior_enabled:
+                relabel, type_prior = _load_stage3(stage3_dir)
+            else:
+                relabel = _load_stage3_relabel(stage3_dir)
             stage2_gene_weights_sha1 = _sha1_file(stage2_dir / "gene_weights.csv")
             plugin_genes_sha1 = _sha1_file(stage2_dir / "plugin_genes.txt")
             if len(plugin_genes) == 0:
@@ -2088,13 +4515,14 @@ class CytoSPACEBackend(MappingBackend):
             eps = float(config.get("eps", 1e-8) or 1e-8)
             type_cols = sorted(list(dict.fromkeys(relabel_map.get(cid, "Unknown_sc_only") for cid in sc_expr.index)))
             cell_types = [relabel_map.get(cid, "Unknown_sc_only") for cid in sc_expr.index]
-            prior_cols_raw = set(type_prior.columns)
-            sc_types = set(type_cols)
-            missing_type_cols = sorted(sc_types - prior_cols_raw)
-            n_cells_missing_type = sum(1 for t in cell_types if t in missing_type_cols)
-            ratio_cells_missing_type = n_cells_missing_type / max(1, len(cell_types))
-            if ratio_cells_missing_type > float(config.get("max_cells_missing_type_prior_ratio", 0.0)):
-                raise ValueError(f"{ratio_cells_missing_type:.3f} 比例的细胞类型缺失在 type_prior 列中，超过阈值")
+            if type_prior is not None:
+                prior_cols_raw = set(type_prior.columns)
+                sc_types = set(type_cols)
+                missing_type_cols = sorted(sc_types - prior_cols_raw)
+                n_cells_missing_type = sum(1 for t in cell_types if t in missing_type_cols)
+                ratio_cells_missing_type = n_cells_missing_type / max(1, len(cell_types))
+                if ratio_cells_missing_type > float(config.get("max_cells_missing_type_prior_ratio", 0.0)):
+                    raise ValueError(f"{ratio_cells_missing_type:.3f} 比例的细胞类型缺失在 type_prior 列中，超过阈值")
 
             
             genes_use = sorted(set(sc_expr.columns) & set(st_expr.columns))
@@ -2178,11 +4606,13 @@ class CytoSPACEBackend(MappingBackend):
                 "default_cells_per_spot": config.get("default_cells_per_spot"),
             }
             if type_prior_raw is None:
-                raise ValueError("type_prior_raw 缺失（align_spot_inputs 返回 None）")
-            type_prior_raw = _ensure_type_prior_columns(type_prior_raw, type_cols)
-            prior_intersection = len(set(spot_ids) & set(type_prior_raw.index))
-            missing_prior_spots = list(set(spot_ids) - set(type_prior_raw.index))
-            missing_prior_examples = missing_prior_spots[:5]
+                if type_prior_enabled:
+                    raise ValueError("type_prior_raw 缺失（align_spot_inputs 返回 None）")
+            if type_prior_raw is not None:
+                type_prior_raw = _ensure_type_prior_columns(type_prior_raw, type_cols)
+                prior_intersection = len(set(spot_ids) & set(type_prior_raw.index))
+                missing_prior_spots = list(set(spot_ids) - set(type_prior_raw.index))
+                missing_prior_examples = missing_prior_spots[:5]
             cost_expr_guard_reason = None
             norm_mode = str(config.get("cost_expr_norm") or "none").lower()
             sample_id = str(config.get("sample") or "")
@@ -2209,24 +4639,68 @@ class CytoSPACEBackend(MappingBackend):
                 eps=float(config.get("cost_expr_norm_eps") or 1e-8),
                 candidate_mask=spot_weight_candidate_mask,
             )
+            spot_weight_mode_effective = (spot_weight_stats or {}).get("mode") or str(config.get("spot_weight_mode") or "none")
+            if (spot_weight_stats or {}).get("status") == "disabled":
+                spot_weight_mode_effective = "none"
+            cost_expr_mode = str((cost_expr_audit or {}).get("mode") or "none").lower()
+            cost_scale_beta = float(config.get("cost_scale_beta") or 0.0)
+            spot_weight_effective_ratio = float((spot_weight_stats or {}).get("weighted_ratio") or 0.0) if spot_weight_matrix is not None else 0.0
+            if (
+                cost_expr_mode == "none"
+                and cost_scale_beta <= 0.0
+                and float(weighted_ratio_applied) == 0.0
+                and spot_weight_effective_ratio == 0.0
+            ):
+                cost_mode_effective = "baseline_compatible"
+            else:
+                cost_mode_effective = "plus_weighted"
             refine_lambda = float(config.get("svg_refine_lambda", 0.0) or 0.0)
             refine_k = int(config.get("svg_refine_k", 8))
             distance_metric = config.get("distance_metric", "Pearson_correlation")
-            lambda_prior = float(config.get("lambda_prior", 1.0))
-            effective_lambda_refine = lambda_prior if config.get("type_prior_apply_refine", True) else 0.0
-            effective_lambda_harden = lambda_prior if config.get("type_prior_apply_harden", True) else 0.0
+            lambda_prior_cfg = float(config.get("lambda_prior", 1.0))
+            lambda_prior = 0.0 if not type_prior_enabled else lambda_prior_cfg
+            effective_lambda_refine = lambda_prior if (type_prior_enabled and config.get("type_prior_apply_refine", True)) else 0.0
+            effective_lambda_harden = lambda_prior if (type_prior_enabled and config.get("type_prior_apply_harden", True)) else 0.0
             type_prior_eps = eps
 
             with tempfile.TemporaryDirectory() as tmp:
                 tmp_dir = Path(tmp)
                 os.environ.setdefault("PYTHON", sys.executable)
                 os.environ.setdefault("PYTHON3", sys.executable)
+                solver_method = config.get("solver_method", "lap_CSPR")
                 sc_weighted = sc_cost.copy()
                 st_weighted = st_cost.copy()
                 sc_vals = sc_cost[genes_use].to_numpy(dtype=float) * w_full
-                st_vals = st_cost[genes_use].to_numpy(dtype=float) * w_full
+                st_vals_base = st_cost[genes_use].to_numpy(dtype=float) * w_full
+                st_vals = st_vals_base
                 if spot_weight_matrix is not None:
-                    st_vals = st_vals * spot_weight_matrix
+                    st_vals = st_vals_base * spot_weight_matrix
+                cost_matrix_sha1 = _sha1_cost_inputs(
+                    sc_vals,
+                    st_vals,
+                    np.asarray(capacity, dtype=int),
+                    distance_metric=distance_metric,
+                    solver_method=solver_method,
+                )
+                cost_matrix_sha1_no_spot_weight = _sha1_cost_inputs(
+                    sc_vals,
+                    st_vals_base,
+                    np.asarray(capacity, dtype=int),
+                    distance_metric=distance_metric,
+                    solver_method=solver_method,
+                )
+                spot_weight_mode_raw = str(config.get("spot_weight_mode") or "none").lower()
+                spot_weight_kappa = float(config.get("spot_weight_kappa") or 0.0)
+                spot_weight_topk = int(config.get("spot_weight_topk") or 0)
+                knobs_active = spot_weight_mode_raw not in ("none", "") and spot_weight_kappa > 0.0 and spot_weight_topk > 0
+                if knobs_active and cost_matrix_sha1 == cost_matrix_sha1_no_spot_weight:
+                    part1_knobs_no_effect = True
+                if bool(config.get("strict_config", True)) and part1_knobs_no_effect:
+                    raise ValueError(
+                        "[Part1Guard] spot_weight knobs have no effect (weights degenerate). "
+                        "Refuse to continue under strict_config. "
+                        f"sample={sample_id} config_id={config.get('config_id')}"
+                    )
                 sc_weighted.loc[:, genes_use] = sc_vals
                 st_weighted.loc[:, genes_use] = st_vals
                 sc_path, ct_path, st_path, coord_path, cps_path = _write_cytospace_inputs(
@@ -2248,12 +4722,13 @@ class CytoSPACEBackend(MappingBackend):
                 # Query sc composition (plugin_type) and apply type_prior only in our own refine/harden.
                 st_ct_frac_path = _write_global_fraction(cell_types, type_cols, tmp_dir / "ct_fraction.csv")
                 # spot×type -> 全局 1×type（喂 CytoSPACE）
-                row_sum = type_prior_raw.sum(axis=1).replace(0, eps)
-                type_prior_norm = type_prior_raw.div(row_sum, axis=0)
+                type_prior_norm = None
+                if type_prior_raw is not None:
+                    row_sum = type_prior_raw.sum(axis=1).replace(0, eps)
+                    type_prior_norm = type_prior_raw.div(row_sum, axis=0)
 
                 out_tmp = tmp_dir / "cyto_out"
                 out_tmp.mkdir(exist_ok=True)
-                solver_method = config.get("solver_method", "lap_CSPR")
                 main_cytospace(
                     scRNA_path=str(sc_path),
                     cell_type_path=str(ct_path),
@@ -2291,6 +4766,11 @@ class CytoSPACEBackend(MappingBackend):
                 )
                 if pool_orig_ids is None:
                     raise ValueError("pool_orig_ids 缺失")
+                missing_type = [cid for cid in pool_orig_ids if cid not in sc_meta.index]
+                if missing_type:
+                    raise ValueError(f"sc_metadata 缺少 pool_orig_ids: {missing_type[:5]}")
+                pool_cell_types = sc_meta.loc[pool_orig_ids, "type_col"].astype(str).tolist()
+                cell_assignment_sha1_pre = _sha1_assignments(assignments)
                 mat0 = _assignments_to_matrix(assignments, len(st_expr.index), len(cell_ids)).tocsr()
                 mat = mat0
                 capacity_arr = np.asarray(capacity, dtype=int)
@@ -2299,60 +4779,291 @@ class CytoSPACEBackend(MappingBackend):
                     raise ValueError(f"cells_per_spot 总和 {cap_sum} 与 CytoSPACE cell pool 大小 {len(cell_ids)} 不一致")
                 post_adjust = bool(config.get("post_assign_adjust", True))
                 knn_mode = None
-                if post_adjust and refine_lambda > 0:
-                    missing_pool = [cid for cid in pool_orig_ids if cid not in sc_expr.index]
-                    if missing_pool:
-                        raise ValueError(f"CytoSPACE cell pool ?????????sc_expr ???????????? OriginalCID????????? {missing_pool[:5]}")
-                    sc_svg = sc_expr.loc[pool_orig_ids, genes_use].to_numpy(dtype=float) * w_full
-                    st_svg = st_expr[genes_use].to_numpy(dtype=float) * w_full
-                    mat, knn_mode = _refine_spot_cell_matrix_svg(
-                        mat=mat,
+                refine_used = False
+                if svg_post_enabled and not post_adjust:
+                    svg_post_meta["skip_reason"] = "post_assign_adjust=false"
+                svg_post_rounds = int(config.get("svg_post_rounds", 3) or 0)
+                svg_post_neighbor_k = int(config.get("svg_post_neighbor_k", 10) or 0)
+                svg_post_alpha = float(config.get("svg_post_alpha", 0.2) or 0.0)
+                svg_post_max_move_frac = float(config.get("svg_post_max_move_frac", 0.02) or 0.0)
+                svg_post_max_changed_cells = config.get("svg_post_max_changed_cells")
+                if svg_post_max_changed_cells in (None, ""):
+                    svg_post_max_changed_cells = None
+                else:
+                    svg_post_max_changed_cells = int(svg_post_max_changed_cells)
+                svg_post_selection_mode = config.get("svg_post_selection_mode")
+                if svg_post_selection_mode in (None, ""):
+                    svg_post_selection_mode = "sequential_greedy"
+                svg_post_action_topm = config.get("svg_post_action_topm")
+                if svg_post_action_topm in (None, ""):
+                    svg_post_action_topm = None
+                else:
+                    svg_post_action_topm = int(svg_post_action_topm)
+                svg_post_sort_key = config.get("svg_post_sort_key")
+                if svg_post_sort_key in (None, ""):
+                    svg_post_sort_key = "gainA_penalized"
+                else:
+                    svg_post_sort_key = str(svg_post_sort_key)
+                svg_post_lambda_partner_hurt = config.get("svg_post_lambda_partner_hurt")
+                if svg_post_lambda_partner_hurt in (None, ""):
+                    svg_post_lambda_partner_hurt = 0.0
+                else:
+                    svg_post_lambda_partner_hurt = float(svg_post_lambda_partner_hurt)
+                svg_post_lambda_base = config.get("svg_post_lambda_base")
+                if svg_post_lambda_base in (None, ""):
+                    svg_post_lambda_base = 0.0
+                else:
+                    svg_post_lambda_base = float(svg_post_lambda_base)
+                svg_post_lambda_type_shift = config.get("svg_post_lambda_type_shift")
+                if svg_post_lambda_type_shift in (None, ""):
+                    svg_post_lambda_type_shift = None
+                else:
+                    svg_post_lambda_type_shift = float(svg_post_lambda_type_shift)
+                svg_post_lambda_type_penalty = config.get("svg_post_lambda_type_penalty")
+                if svg_post_lambda_type_penalty in (None, ""):
+                    svg_post_lambda_type_penalty = None
+                else:
+                    svg_post_lambda_type_penalty = float(svg_post_lambda_type_penalty)
+                if svg_post_lambda_type_shift is None and svg_post_lambda_type_penalty is not None:
+                    svg_post_lambda_type_shift = svg_post_lambda_type_penalty
+                if svg_post_lambda_type_shift is None:
+                    svg_post_lambda_type_shift = 0.0
+                svg_post_allow_swap = bool(config.get("svg_post_allow_swap", True))
+                svg_post_delta_min = float(config.get("svg_post_delta_min", 1e-6) or 0.0)
+                svg_post_weight_clip_max = float(config.get("svg_post_weight_clip_max", 1.2) or 1.2)
+                svg_post_base_margin_tau = config.get("svg_post_base_margin_tau")
+                if svg_post_base_margin_tau in (None, ""):
+                    svg_post_base_margin_tau = 0.0
+                else:
+                    svg_post_base_margin_tau = float(svg_post_base_margin_tau)
+                svg_post_require_delta_base_nonpositive = bool(config.get("svg_post_require_delta_base_nonpositive", False))
+                svg_post_uncertain_margin_tau = config.get("svg_post_uncertain_margin_tau")
+                if svg_post_uncertain_margin_tau in (None, ""):
+                    svg_post_uncertain_margin_tau = None
+                else:
+                    svg_post_uncertain_margin_tau = float(svg_post_uncertain_margin_tau)
+                svg_post_swap_delta_min = config.get("svg_post_swap_delta_min")
+                if svg_post_swap_delta_min in (None, ""):
+                    svg_post_swap_delta_min = svg_post_delta_min
+                else:
+                    svg_post_swap_delta_min = float(svg_post_swap_delta_min)
+                svg_post_swap_require_delta_base_nonpositive = config.get("svg_post_swap_require_delta_base_nonpositive_for_both")
+                if svg_post_swap_require_delta_base_nonpositive in (None, ""):
+                    svg_post_swap_require_delta_base_nonpositive = bool(
+                        config.get("svg_post_swap_require_delta_base_nonpositive", False)
+                    )
+                else:
+                    svg_post_swap_require_delta_base_nonpositive = bool(svg_post_swap_require_delta_base_nonpositive)
+                svg_post_swap_depth = int(config.get("svg_post_swap_depth", 1) or 1)
+                svg_post_swap_only_within_tieset = bool(config.get("svg_post_swap_only_within_tieset", False))
+                svg_post_max_swaps_per_round = config.get("svg_post_max_swaps_per_round")
+                if svg_post_max_swaps_per_round in (None, ""):
+                    svg_post_max_swaps_per_round = None
+                else:
+                    svg_post_max_swaps_per_round = int(svg_post_max_swaps_per_round)
+                svg_post_swap_base_mode = config.get("svg_post_swap_base_mode")
+                if svg_post_swap_base_mode in (None, ""):
+                    svg_post_swap_base_mode = "both_nonpositive"
+                svg_post_base_pair_budget_eps = config.get("svg_post_base_pair_budget_eps")
+                if svg_post_base_pair_budget_eps in (None, ""):
+                    svg_post_base_pair_budget_eps = 0.0
+                else:
+                    svg_post_base_pair_budget_eps = float(svg_post_base_pair_budget_eps)
+                svg_post_swap_scope = config.get("svg_post_swap_scope")
+                if svg_post_swap_scope in (None, ""):
+                    svg_post_swap_scope = "a_and_b_tieset" if svg_post_swap_only_within_tieset else "a_tieset_only"
+                svg_post_swap_partner_topm = config.get("svg_post_swap_partner_topm")
+                if svg_post_swap_partner_topm in (None, ""):
+                    svg_post_swap_partner_topm = None
+                else:
+                    svg_post_swap_partner_topm = int(svg_post_swap_partner_topm)
+                svg_post_swap_target_topk = config.get("svg_post_swap_target_topk")
+                if svg_post_swap_target_topk in (None, ""):
+                    svg_post_swap_target_topk = None
+                else:
+                    svg_post_swap_target_topk = int(svg_post_swap_target_topk)
+                svg_post_swap_target_expand_mode = config.get("svg_post_swap_target_expand_mode")
+                if svg_post_swap_target_expand_mode in (None, ""):
+                    svg_post_swap_target_expand_mode = "none"
+                svg_post_swap_target_expand_k = config.get("svg_post_swap_target_expand_k")
+                if svg_post_swap_target_expand_k in (None, ""):
+                    svg_post_swap_target_expand_k = 0
+                else:
+                    svg_post_swap_target_expand_k = int(svg_post_swap_target_expand_k)
+                if type_post_enabled and not post_adjust:
+                    type_post_meta["skip_reason"] = "post_assign_adjust=false"
+                type_post_marker_source = config.get("type_post_marker_source")
+                if type_post_marker_source in (None, ""):
+                    type_post_marker_source = None
+                else:
+                    type_post_marker_source = str(type_post_marker_source).strip().lower()
+                type_post_marker_list = config.get("type_post_marker_list")
+                type_post_markers_per_type = config.get("type_post_markers_per_type")
+                if type_post_markers_per_type in (None, ""):
+                    type_post_markers_per_type = None
+                else:
+                    type_post_markers_per_type = int(type_post_markers_per_type)
+                type_post_gene_weighting = config.get("type_post_gene_weighting")
+                if type_post_gene_weighting in (None, ""):
+                    type_post_gene_weighting = None
+                else:
+                    type_post_gene_weighting = str(type_post_gene_weighting).strip().lower()
+                type_post_require_gainA_positive = bool(config.get("type_post_require_gainA_positive", True))
+                type_post_rounds = int(config.get("type_post_rounds", 1) or 0)
+                type_post_neighbor_k = int(config.get("type_post_neighbor_k", 10) or 0)
+                type_post_max_changed_cells = config.get("type_post_max_changed_cells")
+                if type_post_max_changed_cells in (None, ""):
+                    type_post_max_changed_cells = None
+                else:
+                    type_post_max_changed_cells = int(type_post_max_changed_cells)
+                type_post_selection_mode = config.get("type_post_selection_mode")
+                if type_post_selection_mode in (None, ""):
+                    type_post_selection_mode = "global_pool_greedy"
+                type_post_action_topm = config.get("type_post_action_topm")
+                if type_post_action_topm in (None, ""):
+                    type_post_action_topm = None
+                else:
+                    type_post_action_topm = int(type_post_action_topm)
+                type_post_allow_swap = bool(config.get("type_post_allow_swap", True))
+                type_post_delta_min = float(config.get("type_post_delta_min", 1e-6) or 0.0)
+                type_post_base_margin_tau = config.get("type_post_base_margin_tau")
+                if type_post_base_margin_tau in (None, ""):
+                    type_post_base_margin_tau = 0.0
+                else:
+                    type_post_base_margin_tau = float(type_post_base_margin_tau)
+                type_post_swap_target_topk = config.get("type_post_swap_target_topk")
+                if type_post_swap_target_topk in (None, ""):
+                    type_post_swap_target_topk = None
+                else:
+                    type_post_swap_target_topk = int(type_post_swap_target_topk)
+                if type_post_mode == "local_marker_swap":
+                    if type_post_marker_source is None:
+                        type_post_marker_source = "sc_auto_top"
+                    if type_post_markers_per_type is None:
+                        type_post_markers_per_type = 30
+                    if type_post_gene_weighting is None:
+                        type_post_gene_weighting = "spot_zscore"
+                    if type_post_swap_target_topk is None:
+                        type_post_swap_target_topk = 5
+                type_post_swap_scope = config.get("type_post_swap_scope")
+                if type_post_swap_scope in (None, ""):
+                    type_post_swap_scope = "a_tieset_only"
+                type_post_swap_base_mode = config.get("type_post_swap_base_mode")
+                if type_post_swap_base_mode in (None, ""):
+                    type_post_swap_base_mode = "pair_budget"
+                type_post_base_pair_budget_eps = config.get("type_post_base_pair_budget_eps")
+                if type_post_base_pair_budget_eps in (None, ""):
+                    type_post_base_pair_budget_eps = 0.0
+                else:
+                    type_post_base_pair_budget_eps = float(type_post_base_pair_budget_eps)
+                type_post_max_swaps_per_round = config.get("type_post_max_swaps_per_round")
+                if type_post_max_swaps_per_round in (None, ""):
+                    type_post_max_swaps_per_round = None
+                else:
+                    type_post_max_swaps_per_round = int(type_post_max_swaps_per_round)
+                type_post_partner_hurt_max = config.get("type_post_partner_hurt_max")
+                if type_post_partner_hurt_max in (None, ""):
+                    type_post_partner_hurt_max = None
+                else:
+                    type_post_partner_hurt_max = float(type_post_partner_hurt_max)
+                type_post_max_high_hurt_actions = config.get("type_post_max_high_hurt_actions")
+                if type_post_max_high_hurt_actions in (None, ""):
+                    type_post_max_high_hurt_actions = None
+                else:
+                    type_post_max_high_hurt_actions = int(type_post_max_high_hurt_actions)
+                type_post_high_hurt_threshold = config.get("type_post_high_hurt_threshold")
+                if type_post_high_hurt_threshold in (None, ""):
+                    type_post_high_hurt_threshold = None
+                else:
+                    type_post_high_hurt_threshold = float(type_post_high_hurt_threshold)
+                type_post_lambda_partner = config.get("type_post_lambda_partner")
+                if type_post_lambda_partner in (None, ""):
+                    type_post_lambda_partner = config.get("type_post_lambda_partner_hurt")
+                if type_post_lambda_partner in (None, ""):
+                    type_post_lambda_partner = 0.0
+                else:
+                    type_post_lambda_partner = float(type_post_lambda_partner)
+                type_post_lambda_base = config.get("type_post_lambda_base")
+                if type_post_lambda_base in (None, ""):
+                    type_post_lambda_base = 0.0
+                else:
+                    type_post_lambda_base = float(type_post_lambda_base)
+                if type_post_enabled:
+                    type_post_effective_subset = {
+                        "type_post_mode": type_post_mode,
+                        "type_post_marker_source": type_post_marker_source,
+                        "type_post_markers_per_type": type_post_markers_per_type,
+                        "type_post_gene_weighting": type_post_gene_weighting,
+                        "type_post_require_gainA_positive": type_post_require_gainA_positive,
+                        "type_post_rounds": type_post_rounds,
+                        "type_post_neighbor_k": type_post_neighbor_k,
+                        "type_post_max_changed_cells": type_post_max_changed_cells,
+                        "type_post_selection_mode": type_post_selection_mode,
+                        "type_post_action_topm": type_post_action_topm,
+                        "type_post_allow_swap": type_post_allow_swap,
+                        "type_post_delta_min": type_post_delta_min,
+                        "type_post_base_margin_tau": type_post_base_margin_tau,
+                        "type_post_swap_target_topk": type_post_swap_target_topk,
+                        "type_post_swap_scope": type_post_swap_scope,
+                        "type_post_swap_base_mode": type_post_swap_base_mode,
+                        "type_post_base_pair_budget_eps": type_post_base_pair_budget_eps,
+                        "type_post_max_swaps_per_round": type_post_max_swaps_per_round,
+                        "type_post_partner_hurt_max": type_post_partner_hurt_max,
+                        "type_post_max_high_hurt_actions": type_post_max_high_hurt_actions,
+                        "type_post_high_hurt_threshold": type_post_high_hurt_threshold,
+                        "type_post_lambda_partner": type_post_lambda_partner,
+                        "type_post_lambda_base": type_post_lambda_base,
+                    }
+                if post_adjust and svg_post_enabled:
+                    assignments_hard, hard_mat, svg_post_meta = _svg_posterior_local_refine(
+                        assignments,
+                        distance_metric=distance_metric,
+                        sc_cost=sc_cost,
+                        st_cost=st_cost,
                         st_coords=st_coords,
-                        st_svg=st_svg,
-                        sc_svg=sc_svg,
-                        lambda_base=refine_lambda,
-                        k=refine_k,
-                        eps=eps,
-                        batch_size=config.get("svg_refine_batch_size"),
-                        knn_metric=config.get("knn_metric", "euclidean"),
-                        knn_block_size=int(config.get("knn_block_size", 1024) or 1024),
-                        knn_max_dense_n=int(config.get("knn_max_dense_n", 5000) or 5000),
-                    )
-                    refine_used = True
-                else:
-                    refine_used = False
-                # ???????????? refine???per-spot soft adjust???
-                if post_adjust and effective_lambda_refine > 0 and config.get("type_prior_apply_refine", True):
-                    missing_pool_types = sorted(set(pool_types) - set(type_cols))
-                    if missing_pool_types:
-                        raise ValueError(f"cell pool ?????? type_cols ??????????????????: {missing_pool_types[:5]}")
-                    mat = _type_prior_refine(mat, pool_types, type_cols, type_prior_norm, effective_lambda_refine, eps=type_prior_eps)
-                hard_topk = int(config.get("harden_topk", 5) or 5)
-                prior_candidate_topk = int(config.get("prior_candidate_topk", 0) or 0)
-                prior_candidate_weight = float(config.get("prior_candidate_weight", 1.0) or 1.0)
-                if post_adjust:
-                    assignments_hard, hard_mat, hard_meta = _harden_assignment_quota_matching(
-                        mat=mat,
+                        pool_orig_ids=pool_orig_ids,
+                        cell_types=pool_cell_types,
+                        spot_ids=spot_ids,
+                        plugin_genes=plugin_genes,
+                        genes_use=genes_use,
+                        w_full=w_full,
+                        spot_weight_matrix=spot_weight_matrix,
                         capacity=capacity_arr,
-                        cell_types=pool_types,
-                        type_prior=type_prior_norm,
-                        spot_ids=list(st_expr.index),
-                        lambda_prior=effective_lambda_harden,
-                        eps=eps,
-                        topk=hard_topk,
-                        prior_candidate_topk=prior_candidate_topk,
-                        prior_candidate_weight=prior_candidate_weight,
-                        fallback_assignments=assignments,
-                        ablate_lambda=False,
-                        min_prior_row_nonzero_ratio=float(config.get("min_prior_row_nonzero_ratio", 0.0)),
+                        neighbor_k=svg_post_neighbor_k,
+                        rounds=svg_post_rounds,
+                        alpha=svg_post_alpha,
+                        max_move_frac=svg_post_max_move_frac,
+                        max_changed_cells=svg_post_max_changed_cells,
+                        selection_mode=svg_post_selection_mode,
+                        action_topm=svg_post_action_topm,
+                        sort_key=svg_post_sort_key,
+                        lambda_partner_hurt=svg_post_lambda_partner_hurt,
+                        lambda_base=svg_post_lambda_base,
+                        lambda_type_shift=svg_post_lambda_type_shift,
+                        allow_swap=svg_post_allow_swap,
+                        delta_min=svg_post_delta_min,
+                        weight_clip_max=svg_post_weight_clip_max,
+                        base_margin_tau=svg_post_base_margin_tau,
+                        require_delta_base_nonpositive=svg_post_require_delta_base_nonpositive,
+                        uncertain_margin_tau=svg_post_uncertain_margin_tau,
+                        swap_delta_min=svg_post_swap_delta_min,
+                        swap_require_delta_base_nonpositive=svg_post_swap_require_delta_base_nonpositive,
+                        swap_depth=svg_post_swap_depth,
+                        swap_only_within_tieset=svg_post_swap_only_within_tieset,
+                        max_swaps_per_round=svg_post_max_swaps_per_round,
+                        swap_base_mode=svg_post_swap_base_mode,
+                        base_pair_budget_eps=svg_post_base_pair_budget_eps,
+                        swap_scope=svg_post_swap_scope,
+                        swap_partner_topm=svg_post_swap_partner_topm,
+                        swap_target_topk=svg_post_swap_target_topk,
+                        swap_target_expand_mode=svg_post_swap_target_expand_mode,
+                        swap_target_expand_k=svg_post_swap_target_expand_k,
                     )
-                else:
-                    assignments_hard = assignments
-                    hard_mat = mat0
+                    svg_post_used = True
                     hard_meta = {
-                        "harden_method": "skipped_post_adjust",
+                        "harden_method": "svg_post_local_swap",
                         "harden_topk": None,
-                        "capacity_check": None,
+                        "capacity_check": (svg_post_meta or {}).get("capacity_check"),
                         "harden_fallback_n_cells": None,
                         "harden_repair_n_cells": None,
                         "n_unassigned_before_repair": None,
@@ -2360,75 +5071,201 @@ class CytoSPACEBackend(MappingBackend):
                         "type_prior_row_nonzero_ratio": None,
                         "type_prior_row_entropy_mean": None,
                         "type_prior_row_entropy_max": None,
+                        "prior_effect_fraction_delta": 0.0,
+                        "prior_effect_fraction_delta_mean_per_spot": 0.0,
+                        "prior_effect_fraction_delta_audit_before": None,
+                        "prior_effect_fraction_delta_audit_after": None,
                     }
-                if post_adjust and config.get("prior_ablation_enabled", False):
-                    # ablation 仅用于证据链；即使失败也不应影响 plus 主输出
-                    hard_meta["prior_ablation_enabled"] = True
-                    try:
-                        ablate_assign, ablate_mat, ablate_meta = _harden_assignment_quota_matching(
+                else:
+                    if post_adjust and refine_lambda > 0:
+                        missing_pool = [cid for cid in pool_orig_ids if cid not in sc_expr.index]
+                        if missing_pool:
+                            raise ValueError(f"CytoSPACE cell pool ?????????sc_expr ???????????? OriginalCID????????? {missing_pool[:5]}")
+                        sc_svg = sc_expr.loc[pool_orig_ids, genes_use].to_numpy(dtype=float) * w_full
+                        st_svg = st_expr[genes_use].to_numpy(dtype=float) * w_full
+                        mat, knn_mode = _refine_spot_cell_matrix_svg(
+                            mat=mat,
+                            st_coords=st_coords,
+                            st_svg=st_svg,
+                            sc_svg=sc_svg,
+                            lambda_base=refine_lambda,
+                            k=refine_k,
+                            eps=eps,
+                            batch_size=config.get("svg_refine_batch_size"),
+                            knn_metric=config.get("knn_metric", "euclidean"),
+                            knn_block_size=int(config.get("knn_block_size", 1024) or 1024),
+                            knn_max_dense_n=int(config.get("knn_max_dense_n", 5000) or 5000),
+                        )
+                        refine_used = True
+                    else:
+                        refine_used = False
+                    # ???????????? refine???per-spot soft adjust???
+                    if type_prior_enabled and post_adjust and effective_lambda_refine > 0 and config.get("type_prior_apply_refine", True):
+                        missing_pool_types = sorted(set(pool_types) - set(type_cols))
+                        if missing_pool_types:
+                            raise ValueError(f"cell pool ?????? type_cols ??????????????????: {missing_pool_types[:5]}")
+                        mat = _type_prior_refine(mat, pool_types, type_cols, type_prior_norm, effective_lambda_refine, eps=type_prior_eps)
+                    hard_topk = int(config.get("harden_topk", 5) or 5)
+                    prior_candidate_topk = int(config.get("prior_candidate_topk", 0) or 0)
+                    prior_candidate_weight = float(config.get("prior_candidate_weight", 1.0) or 1.0)
+                    if not type_prior_enabled:
+                        prior_candidate_topk = 0
+                        prior_candidate_weight = 0.0
+                    if post_adjust:
+                        assignments_hard, hard_mat, hard_meta = _harden_assignment_quota_matching(
                             mat=mat,
                             capacity=capacity_arr,
                             cell_types=pool_types,
-                            type_prior=type_prior_norm,
+                            type_prior=type_prior_norm if type_prior_enabled else None,
                             spot_ids=list(st_expr.index),
-                            lambda_prior=0.0,
+                            lambda_prior=effective_lambda_harden,
                             eps=eps,
                             topk=hard_topk,
                             prior_candidate_topk=prior_candidate_topk,
                             prior_candidate_weight=prior_candidate_weight,
                             fallback_assignments=assignments,
-                            ablate_lambda=True,
+                            ablate_lambda=False,
                             min_prior_row_nonzero_ratio=float(config.get("min_prior_row_nonzero_ratio", 0.0)),
                         )
-                        hard_meta["prior_ablation_meta"] = ablate_meta
+                    else:
+                        assignments_hard = assignments
+                        hard_mat = mat0
+                        hard_meta = {
+                            "harden_method": "skipped_post_adjust",
+                            "harden_topk": None,
+                            "capacity_check": None,
+                            "harden_fallback_n_cells": None,
+                            "harden_repair_n_cells": None,
+                            "n_unassigned_before_repair": None,
+                            "n_unassigned_cells": None,
+                            "type_prior_row_nonzero_ratio": None,
+                            "type_prior_row_entropy_mean": None,
+                            "type_prior_row_entropy_max": None,
+                        }
+                    if post_adjust and type_prior_enabled and config.get("prior_ablation_enabled", False):
+                        # ablation 仅用于证据链；即使失败也不应影响 plus 主输出
+                        hard_meta["prior_ablation_enabled"] = True
                         try:
-                            change_rate, audit = _compute_ablation_change_rate_checked(
-                                assignments_hard,
-                                ablate_assign,
-                                context="prior_ablation_change_rate",
+                            ablate_assign, ablate_mat, ablate_meta = _harden_assignment_quota_matching(
+                                mat=mat,
+                                capacity=capacity_arr,
+                                cell_types=pool_types,
+                                type_prior=type_prior_norm if type_prior_enabled else None,
+                                spot_ids=list(st_expr.index),
+                                lambda_prior=0.0,
+                                eps=eps,
+                                topk=hard_topk,
+                                prior_candidate_topk=prior_candidate_topk,
+                                prior_candidate_weight=prior_candidate_weight,
+                                fallback_assignments=assignments,
+                                ablate_lambda=True,
+                                min_prior_row_nonzero_ratio=float(config.get("min_prior_row_nonzero_ratio", 0.0)),
                             )
-                            hard_meta["prior_ablation_status"] = "ok"
-                            hard_meta["prior_ablation_change_rate"] = change_rate
-                            hard_meta["prior_ablation_audit"] = audit
+                            hard_meta["prior_ablation_meta"] = ablate_meta
+                            try:
+                                change_rate, audit = _compute_ablation_change_rate_checked(
+                                    assignments_hard,
+                                    ablate_assign,
+                                    context="prior_ablation_change_rate",
+                                )
+                                hard_meta["prior_ablation_status"] = "ok"
+                                hard_meta["prior_ablation_change_rate"] = change_rate
+                                hard_meta["prior_ablation_audit"] = audit
+                            except Exception as e:
+                                hard_meta["prior_ablation_status"] = "invalid"
+                                hard_meta["prior_ablation_change_rate"] = None
+                                hard_meta["prior_ablation_error_reason"] = str(e)
+                                hard_meta["prior_ablation_audit"] = {
+                                    "context": "prior_ablation_change_rate",
+                                    "n_base": len(assignments_hard),
+                                    "n_ablate": len(ablate_assign),
+                                }
                         except Exception as e:
                             hard_meta["prior_ablation_status"] = "invalid"
                             hard_meta["prior_ablation_change_rate"] = None
-                            hard_meta["prior_ablation_error_reason"] = str(e)
+                            hard_meta["prior_ablation_error_reason"] = f"ablation_harden_failed: {e}"
                             hard_meta["prior_ablation_audit"] = {
                                 "context": "prior_ablation_change_rate",
                                 "n_base": len(assignments_hard),
-                                "n_ablate": len(ablate_assign),
+                                "n_ablate": None,
                             }
-                    except Exception as e:
-                        hard_meta["prior_ablation_status"] = "invalid"
-                        hard_meta["prior_ablation_change_rate"] = None
-                        hard_meta["prior_ablation_error_reason"] = f"ablation_harden_failed: {e}"
-                        hard_meta["prior_ablation_audit"] = {
-                            "context": "prior_ablation_change_rate",
-                            "n_base": len(assignments_hard),
-                            "n_ablate": None,
-                        }
-                frac_before, audit_b = _spot_fraction_from_mat(
-                    mat0,
-                    pool_types,
-                    list(st_expr.index),
-                    type_cols,
-                    context="prior_effect_fraction_delta/before",
-                )
-                frac_after, audit_a = _spot_fraction_from_mat(
-                    hard_mat,
-                    pool_types,
-                    list(st_expr.index),
-                    type_cols,
-                    context="prior_effect_fraction_delta/after",
-                )
-                frac_before_norm = frac_before.div(frac_before.sum(axis=1).replace(0, 1.0), axis=0)
-                frac_after_norm = frac_after.div(frac_after.sum(axis=1).replace(0, 1.0), axis=0)
-                per_spot_l1 = np.abs(frac_before_norm.values - frac_after_norm.values).sum(axis=1)
-                hard_meta["prior_effect_fraction_delta"] = float(per_spot_l1.sum())
-                hard_meta["prior_effect_fraction_delta_mean_per_spot"] = float(per_spot_l1.mean())
-                hard_meta["prior_effect_fraction_delta_audit_before"] = audit_b
-                hard_meta["prior_effect_fraction_delta_audit_after"] = audit_a
+                    if type_prior_enabled:
+                        frac_before, audit_b = _spot_fraction_from_mat(
+                            mat0,
+                            pool_types,
+                            list(st_expr.index),
+                            type_cols,
+                            context="prior_effect_fraction_delta/before",
+                        )
+                        frac_after, audit_a = _spot_fraction_from_mat(
+                            hard_mat,
+                            pool_types,
+                            list(st_expr.index),
+                            type_cols,
+                            context="prior_effect_fraction_delta/after",
+                        )
+                        frac_before_norm = frac_before.div(frac_before.sum(axis=1).replace(0, 1.0), axis=0)
+                        frac_after_norm = frac_after.div(frac_after.sum(axis=1).replace(0, 1.0), axis=0)
+                        per_spot_l1 = np.abs(frac_before_norm.values - frac_after_norm.values).sum(axis=1)
+                        hard_meta["prior_effect_fraction_delta"] = float(per_spot_l1.sum())
+                        hard_meta["prior_effect_fraction_delta_mean_per_spot"] = float(per_spot_l1.mean())
+                        hard_meta["prior_effect_fraction_delta_audit_before"] = audit_b
+                        hard_meta["prior_effect_fraction_delta_audit_after"] = audit_a
+                    else:
+                        hard_meta["prior_effect_fraction_delta"] = 0.0
+                        hard_meta["prior_effect_fraction_delta_mean_per_spot"] = 0.0
+                        hard_meta["prior_effect_fraction_delta_audit_before"] = None
+                        hard_meta["prior_effect_fraction_delta_audit_after"] = None
+                if post_adjust and type_post_enabled:
+                    assignments_hard, hard_mat, type_post_meta = _type_posterior_local_refine(
+                        assignments_hard,
+                        distance_metric=distance_metric,
+                        sc_cost=sc_cost,
+                        st_cost=st_cost,
+                        st_coords=st_coords,
+                        pool_orig_ids=pool_orig_ids,
+                        cell_types=pool_types,
+                        spot_ids=spot_ids,
+                        genes_use=genes_use,
+                        w_full=w_full,
+                        spot_weight_matrix=spot_weight_matrix,
+                        capacity=capacity_arr,
+                        neighbor_k=type_post_neighbor_k,
+                        rounds=type_post_rounds,
+                        max_changed_cells=type_post_max_changed_cells,
+                        selection_mode=type_post_selection_mode,
+                        action_topm=type_post_action_topm,
+                        delta_min=type_post_delta_min,
+                        base_margin_tau=type_post_base_margin_tau,
+                        swap_target_topk=type_post_swap_target_topk,
+                        allow_swap=type_post_allow_swap,
+                        swap_scope=type_post_swap_scope,
+                        swap_base_mode=type_post_swap_base_mode,
+                        base_pair_budget_eps=type_post_base_pair_budget_eps,
+                        max_swaps_per_round=type_post_max_swaps_per_round,
+                        partner_hurt_max=type_post_partner_hurt_max,
+                        max_high_hurt_actions=type_post_max_high_hurt_actions,
+                        high_hurt_threshold=type_post_high_hurt_threshold,
+                        lambda_partner=type_post_lambda_partner,
+                        lambda_base=type_post_lambda_base,
+                        mode=type_post_mode,
+                        marker_source=type_post_marker_source,
+                        marker_list=type_post_marker_list,
+                        markers_per_type=type_post_markers_per_type,
+                        gene_weighting=type_post_gene_weighting,
+                        require_gainA_positive=type_post_require_gainA_positive,
+                        sc_meta=sc_meta,
+                        sc_type_col=type_col,
+                        type_order=type_cols,
+                    )
+                    type_post_used = True
+                    if type_post_effective_subset is not None:
+                        type_post_meta["effective_subset"] = type_post_effective_subset
+                    if isinstance(hard_meta, dict):
+                        hard_meta["type_post_used"] = True
+                        hard_meta["type_post_status"] = type_post_meta.get("status")
+                        hard_meta["type_post_capacity_check"] = type_post_meta.get("capacity_check")
+                        hard_meta["capacity_check"] = type_post_meta.get("capacity_check")
                 try:
                     assigned[["UniqueCID", "OriginalCID", "SpotID", "CellType"]].to_csv(
                         out_dir / "cell_pool_map_plus.csv", index=False
@@ -2481,6 +5318,14 @@ class CytoSPACEBackend(MappingBackend):
                     hard_matrix=hard_mat,
                     unique_cell_ids=[str(x) for x in cell_ids],
                 )
+                cell_assignment_sha1_post = _sha1_assignments(assignments_hard)
+                cell_assignment_sha1_post_file = _sha1_file(out_dir / "cell_assignment_plus.csv")
+                selected_actions = (svg_post_meta or {}).get("selected_actions") if svg_post_used else None
+                if selected_actions:
+                    pd.DataFrame(selected_actions).to_csv(out_dir / "selected_actions.csv", index=False)
+                selected_type_actions = (type_post_meta or {}).get("selected_actions") if type_post_used else None
+                if selected_type_actions:
+                    pd.DataFrame(selected_type_actions).to_csv(out_dir / "selected_type_actions.csv", index=False)
         except Exception as e:
             import traceback
             status = "failed"
@@ -2520,6 +5365,11 @@ class CytoSPACEBackend(MappingBackend):
             "svg_fallback_reason": locals().get("svg_fallback_reasons"),
             "plugin_overlap_ratio": locals().get("plugin_overlap_ratio"),
             "cost_expr_norm": locals().get("cost_expr_audit", None),
+            "cost_mode_effective": locals().get("cost_mode_effective"),
+            "spot_weight_mode_effective": locals().get("spot_weight_mode_effective"),
+            "cost_matrix_sha1": locals().get("cost_matrix_sha1"),
+            "cost_matrix_sha1_no_spot_weight": locals().get("cost_matrix_sha1_no_spot_weight"),
+            "part1_knobs_no_effect": locals().get("part1_knobs_no_effect"),
             "spot_weight_stats": locals().get("spot_weight_stats", None),
             "spot_specific_basin": config.get("spot_specific_basin"),
             "spot_specific_threshold_kappa": config.get("spot_specific_threshold_kappa"),
@@ -2535,6 +5385,10 @@ class CytoSPACEBackend(MappingBackend):
             "capacity_audit": locals().get("capacity_audit", None),
             "cell_id_space": "original_cid",
             "cell_instance_id_column": "unique_cid",
+            "cell_assignment_sha1_pre": locals().get("cell_assignment_sha1_pre"),
+            "cell_assignment_sha1_post": locals().get("cell_assignment_sha1_post"),
+            "cell_assignment_sha1_post_file": locals().get("cell_assignment_sha1_post_file"),
+            "selected_actions_path": str(out_dir / "selected_actions.csv") if (out_dir / "selected_actions.csv").exists() else None,
             "cells_per_spot_source": locals().get("cps_source", None),
             "umi_to_cell_norm": locals().get("norm_val", None),
             "has_capacity_constraint": status == "success",
@@ -2565,15 +5419,28 @@ class CytoSPACEBackend(MappingBackend):
                 "prior_ablation_change_rate": locals().get("hard_meta", {}).get("prior_ablation_change_rate"),
                 "prior_ablation_status": locals().get("hard_meta", {}).get("prior_ablation_status"),
                 "prior_ablation_error_reason": locals().get("hard_meta", {}).get("prior_ablation_error_reason"),
+                "svg_post_used": svg_post_used,
+                "svg_post_status": (svg_post_meta or {}).get("status"),
+                "type_post_used": type_post_used,
+                "type_post_status": (type_post_meta or {}).get("status"),
             },
-            "type_prior_mode": "global_mean_from_spot_matrix",
-            "type_prior_mode_for_cytospace": "global_mean_1xT",
-            "type_prior_mode_for_refine": "per_spot_SxT",
+            "svg_post_meta": svg_post_meta,
+            "type_post_meta": type_post_meta,
+            "type_post_used": type_post_used,
+            "type_post_mode": type_post_mode,
+            "type_post_effective_subset": type_post_effective_subset,
+            "type_post_skipped_reason": type_post_meta.get("skip_reason") if isinstance(type_post_meta, dict) else None,
+            "type_posterior_enabled": type_posterior_enabled,
+            "type_posterior_skipped_reason": type_posterior_skipped_reason,
+            "type_prior_effect": locals().get("hard_meta", {}).get("prior_effect_fraction_delta", 0.0) if type_prior_enabled else 0.0,
+            "type_prior_mode": "off" if not type_prior_enabled else "global_mean_from_spot_matrix",
+            "type_prior_mode_for_cytospace": "off" if not type_prior_enabled else "global_mean_1xT",
+            "type_prior_mode_for_refine": "off" if not type_prior_enabled else "per_spot_SxT",
             "type_columns": locals().get("type_cols", None),
             "spot_alignment_audit": locals().get("spot_alignment_audit", None),
             "n_spots_stage1": len(st_expr.index),
             "n_spots_coords": len(st_coords.index),
-            "n_spots_type_prior": len(type_prior.index) if "type_prior" in locals() else None,
+            "n_spots_type_prior": len(type_prior.index) if isinstance(type_prior, pd.DataFrame) else None,
             "n_spots_intersection": len(set(st_expr.index) & set(st_coords.index)),
             "n_spots_expr_type_prior_intersection": prior_intersection,
             "example_missing_in_type_prior": missing_prior_examples,
